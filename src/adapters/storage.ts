@@ -4,6 +4,7 @@ import type { AppState } from "../domain/types.ts";
 export class JsonStore<T> {
   private readonly file: string;
   private readonly fallback: T;
+  private pending: Promise<void> = Promise.resolve();
   constructor(file: string, fallback: T) {
     this.file = file;
     this.fallback = fallback;
@@ -15,11 +16,19 @@ export class JsonStore<T> {
       return this.fallback;
     }
   }
-  async save(value: T): Promise<void> {
-    await mkdir(dirname(this.file), { recursive: true });
-    const tmp = `${this.file}.tmp`;
-    await writeFile(tmp, JSON.stringify(value, null, 2));
-    await rename(tmp, this.file);
+  save(value: T): Promise<void> {
+    const text = JSON.stringify(value, null, 2);
+    const operation = this.pending.then(async () => {
+      await mkdir(dirname(this.file), { recursive: true });
+      const tmp = `${this.file}.tmp`;
+      await writeFile(tmp, text);
+      await rename(tmp, this.file);
+    });
+    this.pending = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    return operation;
   }
 }
 export type Persisted = Pick<AppState, "tables" | "meeting"> & {

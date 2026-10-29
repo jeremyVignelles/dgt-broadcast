@@ -54,14 +54,22 @@ function boardHtml(game) {
 function tableHtml(table) {
   const game = table.game;
   const status = STATUS[game.status] ?? STATUS.disconnected;
-  const turn = sideToMove(game.fen);
+  const turn = game.clock
+    ? game.clock.connected && game.clock.running && game.whiteClockSide && game.clock.activeSide
+      ? game.clock.activeSide === game.whiteClockSide
+        ? "white"
+        : "black"
+      : undefined
+    : game.positionStatus === "unresolved"
+      ? undefined
+      : sideToMove(game.fen);
   const clock = (side, value) =>
     `<span class="clock${status.level === "ok" && turn === side ? " active" : ""}">${formatClock(value)}</span>`;
   const overlay = status.text ? `<div class="overlay">${status.text}</div>` : "";
   return `<div class="table ${status.level}">
     <div class="strip"><span class="num">${escapeHtml(table.id)}</span>${playerHtml(game.black, "Noir")}${clock("black", game.blackClock)}</div>
     <div class="board">${boardHtml(game)}${overlay}</div>
-    <div class="strip">${playerHtml(game.white, "Blanc")}${batteryHtml(game.battery)}${clock("white", game.whiteClock)}</div>
+    <div class="strip">${playerHtml(game.white, "Blanc")}${game.result ? `<span class="badge">${escapeHtml(game.result)}</span>` : ""}${batteryHtml(game.battery)}${clock("white", game.whiteClock)}</div>
   </div>`;
 }
 

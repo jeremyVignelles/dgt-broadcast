@@ -47,6 +47,13 @@
           <button id="connect">Connecter les échiquiers</button>
           <span id="connect-status" role="status"></span>
         </div>
+        <div class="row">
+          <label
+            >Ajouter des tables jusqu'à
+            <input id="table-count" type="number" min="1" max="32" value="8"
+          /></label>
+          <button id="add-tables" class="secondary">Ajouter</button>
+        </div>
         <table id="tables">
           <thead>
             <tr>
@@ -55,7 +62,147 @@
               <th>État</th>
               <th>Batterie</th>
               <th>Affichée</th>
+              <th>Pendule : blancs</th>
+              <th>Mesures / résultat</th>
               <th></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2>Port série USB / RFCOMM</h2>
+        <p class="hint">
+          Même protocole pour les deux transports. L'identifiant USB est provisoire et dérivé du
+          chemin du port.
+        </p>
+        <div class="row">
+          <button id="serial-list" class="secondary">Lister les ports</button>
+          <input id="serial-path" placeholder="/dev/ttyUSB0" aria-label="Chemin du port" />
+          <input
+            id="serial-table"
+            type="number"
+            min="1"
+            max="32"
+            value="1"
+            aria-label="Numéro de table"
+          />
+          <button id="serial-connect">Connecter ce port</button>
+        </div>
+        <pre id="serial-ports"></pre>
+      </section>
+
+      <section>
+        <h2>Simulateur du protocole</h2>
+        <p class="hint">
+          Ce simulateur traverse le véritable pilote et peut être enregistré. Les secondes sont des
+          valeurs fixes, pas un décompte automatique.
+        </p>
+        <div class="row">
+          <label
+            >Table <input id="protocol-table" type="number" min="1" max="32" value="1"
+          /></label>
+          <button id="protocol-connect">Connecter un plateau simulé</button>
+          <button id="protocol-fault" class="secondary">Simuler une panne</button>
+        </div>
+        <div class="row">
+          <input id="protocol-square" value="e4" aria-label="Case simulée" maxlength="2" />
+          <select id="protocol-piece" aria-label="Pièce simulée">
+            <option value="0">Vide</option>
+            <option value="1">Pion blanc</option>
+            <option value="2">Tour blanche</option>
+            <option value="3">Cavalier blanc</option>
+            <option value="4">Fou blanc</option>
+            <option value="5">Roi blanc</option>
+            <option value="6">Dame blanche</option>
+            <option value="7">Pion noir</option>
+            <option value="8">Tour noire</option>
+            <option value="9">Cavalier noir</option>
+            <option value="10">Fou noir</option>
+            <option value="11">Roi noir</option>
+            <option value="12">Dame noire</option>
+            <option value="13">Résultat : nulle</option>
+            <option value="14">Résultat : victoire blanche</option>
+            <option value="15">Résultat : victoire noire</option>
+          </select>
+          <button id="protocol-change" class="secondary">Changer cette case</button>
+        </div>
+        <div class="row">
+          <label
+            >Gauche (s) <input id="protocol-left" type="number" min="0" max="35999" value="600"
+          /></label>
+          <label
+            >Droite (s) <input id="protocol-right" type="number" min="0" max="35999" value="600"
+          /></label>
+          <label><input id="protocol-running" type="checkbox" /> En marche</label>
+          <label
+            ><input id="protocol-clock-connected" type="checkbox" checked /> Pendule présente</label
+          >
+          <select id="protocol-active" aria-label="Côté actif">
+            <option value="left">Gauche actif</option>
+            <option value="right">Droite actif</option>
+          </select>
+          <button id="protocol-clock" class="secondary">Envoyer la pendule</button>
+        </div>
+        <div class="row">
+          <label
+            >Batterie (%) <input id="protocol-battery" type="number" min="0" max="100" value="85"
+          /></label>
+          <button id="protocol-battery-send" class="secondary">Envoyer la batterie</button>
+        </div>
+      </section>
+
+      <section>
+        <h2>Enregistrement guidé</h2>
+        <p class="hint">
+          Les trames reçues et commandes envoyées de tous les plateaux connectés sont enregistrées
+          localement. Téléchargez l'historique avant de manipuler le plateau : sa mémoire est
+          circulaire. Aucune commande ne règle ou ne démarre la pendule.
+        </p>
+        <div class="row">
+          <button id="capture-start">Démarrer une session</button>
+          <button id="capture-stop" class="secondary">Arrêter et sauvegarder</button>
+          <span id="capture-status" role="status"></span>
+        </div>
+        <p id="capture-instruction" role="status"></p>
+        <div class="row">
+          <button id="capture-next" class="secondary">Marquer le début de cette étape</button>
+          <button id="capture-skip" class="secondary">Étape suivante / non disponible</button>
+        </div>
+        <div class="row">
+          <input
+            id="capture-marker"
+            placeholder="Observation libre"
+            aria-label="Marqueur libre"
+            maxlength="500"
+          />
+          <button id="capture-mark" class="secondary">Ajouter un marqueur</button>
+        </div>
+        <ul id="capture-files"></ul>
+      </section>
+
+      <section>
+        <h2>Stabilité des liaisons</h2>
+        <p class="hint">
+          Instantané de contrôle demandé toutes les 10 secondes à chaque plateau, en parallèle. «
+          Réponse » est le dernier délai / le délai maximum observé. Les compteurs repartent à zéro
+          à la reconnexion. Laissez une session d'enregistrement ouverte pour conserver les mesures.
+          Huit connexions Bluetooth classiques sur un seul adaptateur ne sont pas garanties : une
+          piconet est généralement limitée à sept périphériques actifs.
+        </p>
+        <p id="diagnostic-summary" role="status"></p>
+        <table id="diagnostics">
+          <thead>
+            <tr>
+              <th>Table / port</th>
+              <th>Identité</th>
+              <th>Connexion</th>
+              <th>Dernière position</th>
+              <th>Messages / octets reçus</th>
+              <th>Réponse (ms)</th>
+              <th>Délais / erreurs</th>
+              <th>Dernière erreur</th>
             </tr>
           </thead>
           <tbody></tbody>

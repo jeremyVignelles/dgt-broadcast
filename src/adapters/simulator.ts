@@ -9,7 +9,11 @@ export class SimulatorTransport extends EventEmitter {
     this.count = count;
   }
   start(): void {
-    for (let i = 1; i <= this.count; i++) {
+    this.ensureTables(this.count);
+  }
+  ensureTables(count: number): void {
+    for (let i = 1; i <= count; i++) {
+      if (this.games.has(i)) continue;
       const game: GameState = {
         tableId: i,
         physicalId: `DGT_BT_SIM_${i}`,

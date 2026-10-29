@@ -1,4 +1,4 @@
-import { escapeHtml } from "./board.js";
+import { escapeHtml, formatClock } from "./board.js";
 
 const $ = (selector) => document.querySelector(selector);
 
@@ -54,7 +54,13 @@ function renderTables() {
         <td class="${cls}">${label}</td>
         <td>${battery}</td>
         <td><input type="checkbox" data-visible="${t.id}" ${t.visible ? "checked" : ""} /></td>
-        <td>${t.physicalId ? `<button class="secondary" data-dissociate="${t.id}">Dissocier</button>` : ""}</td>
+        <td><select data-clock-side="${t.id}" ${t.game.status !== "connected" ? "disabled" : ""}>
+          <option value="" disabled ${!t.game.whiteClockSide ? "selected" : ""}>Inconnu / automatique</option>
+          <option value="left" ${t.game.whiteClockSide === "left" ? "selected" : ""}>Gauche</option>
+          <option value="right" ${t.game.whiteClockSide === "right" ? "selected" : ""}>Droite</option>
+        </select></td>
+        <td>${t.game.clock?.connected ? `G ${formatClock(t.game.clock.left.seconds)} / D ${formatClock(t.game.clock.right.seconds)} · ${t.game.clock.running ? "marche" : "pause"}` : "Pendule absente / inconnue"}${t.game.result ? ` · ${escapeHtml(t.game.result)}` : ""}${t.game.resultStatus === "conflicting" ? " · Résultats contradictoires" : ""}${t.game.positionStatus === "unresolved" ? " · Position non reconstruite" : ""}</td>
+        <td>${t.physicalId ? `<button class="secondary" data-refresh="${t.id}">Relire les données</button> <button class="secondary" data-history="${t.id}">Historique</button> <button class="secondary" data-disconnect="${t.id}">Déconnecter</button> <button class="secondary" data-dissociate="${t.id}">Dissocier</button>` : ""}</td>
       </tr>`;
     })
     .join("");
@@ -176,6 +182,25 @@ document.addEventListener("click", async (event) => {
       });
     } else if (dataset.dissociate) {
       await api("/api/tables/dissociate", { tableId: Number(dataset.dissociate) });
+    } else if (dataset.disconnect) {
+      await api("/api/dgt/disconnect", { tableId: Number(dataset.disconnect) });
+    } else if (dataset.refresh) {
+      event.target.disabled = true;
+      try {
+        await api("/api/dgt/refresh", { tableId: Number(dataset.refresh) });
+      } finally {
+        event.target.disabled = false;
+      }
+    } else if (dataset.history) {
+      const history = await api("/api/dgt/history", { tableId: Number(dataset.history) });
+      const url = URL.createObjectURL(
+        new Blob([JSON.stringify(history, null, 2)], { type: "application/json" }),
+      );
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `dgt-history-table-${dataset.history}.json`;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
     } else if (dataset.simNext || dataset.simReset) {
       const id = Number(dataset.simNext ?? dataset.simReset);
       const step = dataset.simReset ? 0 : ((demoStep.get(id) ?? 0) + 1) % DEMO_GAME.length;
@@ -194,7 +219,9 @@ document.addEventListener("click", async (event) => {
 document.addEventListener("change", async (event) => {
   const { dataset, checked, value } = event.target;
   try {
-    if (dataset.visible) {
+    if (dataset.clockSide && value) {
+      await api("/api/dgt/clock-side", { tableId: Number(dataset.clockSide), side: value });
+    } else if (dataset.visible) {
       await api("/api/tables/visibility", { tableId: Number(dataset.visible), visible: checked });
     } else if (dataset.simStatus) {
       await api("/api/simulator/status", { tableId: Number(dataset.simStatus), status: value });
@@ -211,6 +238,176 @@ document.addEventListener("change", async (event) => {
   }
 });
 
+$("#add-tables").onclick = async () => {
+  try {
+    await api("/api/tables/count", { count: Number($("#table-count").value) });
+  } catch (error) {
+    report(error);
+  }
+};
+$("#serial-list").onclick = async () => {
+  try {
+    $("#serial-ports").textContent = JSON.stringify(await api("/api/dgt/serial/ports"), null, 2);
+  } catch (error) {
+    report(error);
+  }
+};
+$("#serial-connect").onclick = async () => {
+  const button = $("#serial-connect");
+  button.disabled = true;
+  try {
+    await api("/api/dgt/serial/connect", {
+      tableId: Number($("#serial-table").value),
+      path: $("#serial-path").value,
+    });
+  } catch (error) {
+    report(error);
+  } finally {
+    button.disabled = false;
+  }
+};
+
+let captureSteps = [];
+async function protocolEvent(event) {
+  try {
+    await api("/api/dgt/simulator/event", {
+      tableId: Number($("#protocol-table").value),
+      ...event,
+    });
+  } catch (error) {
+    report(error);
+  }
+}
+$("#protocol-connect").onclick = async () => {
+  const button = $("#protocol-connect");
+  button.disabled = true;
+  try {
+    await api("/api/dgt/simulator/connect", { tableId: Number($("#protocol-table").value) });
+  } catch (error) {
+    report(error);
+  } finally {
+    button.disabled = false;
+  }
+};
+$("#protocol-change").onclick = () =>
+  protocolEvent({
+    kind: "square",
+    square: $("#protocol-square").value,
+    code: Number($("#protocol-piece").value),
+  });
+$("#protocol-fault").onclick = () => protocolEvent({ kind: "fault" });
+$("#protocol-clock").onclick = () =>
+  protocolEvent({
+    kind: "clock",
+    leftSeconds: Number($("#protocol-left").value),
+    rightSeconds: Number($("#protocol-right").value),
+    running: $("#protocol-running").checked,
+    activeSide: $("#protocol-active").value,
+    connected: $("#protocol-clock-connected").checked,
+  });
+$("#protocol-battery-send").onclick = () =>
+  protocolEvent({ kind: "battery", percent: Number($("#protocol-battery").value) });
+let captureStep = 0;
+function renderCaptureStep() {
+  $("#capture-instruction").textContent =
+    `${captureStep + 1}/${captureSteps.length} — ${captureSteps[captureStep] ?? ""}`;
+}
+function renderRecording(recording) {
+  $("#capture-status").textContent = recording.error
+    ? `ÉCHEC : ${recording.error}`
+    : `${recording.active ? "Enregistrement en cours" : "Arrêté"} · ${recording.rows} lignes`;
+  $("#capture-start").disabled = recording.open;
+  $("#capture-stop").disabled = !recording.open;
+}
+async function loadRecordings() {
+  const data = await api("/api/dgt/recordings");
+  captureSteps = data.steps;
+  renderCaptureStep();
+  renderRecording(data.recording);
+  $("#capture-files").innerHTML = data.sessions
+    .map(
+      (id) =>
+        `<li><a href="/api/dgt/recordings/${encodeURIComponent(id)}.jsonl">Télécharger ${escapeHtml(id)}</a></li>`,
+    )
+    .join("");
+}
+$("#capture-start").onclick = async () => {
+  try {
+    $("#capture-start").disabled = true;
+    const data = await api("/api/dgt/recordings/start", {});
+    captureStep = 0;
+    if (data.warnings.length) report(new Error(data.warnings.join(" ; ")));
+    await loadRecordings();
+  } catch (error) {
+    report(error);
+    $("#capture-start").disabled = false;
+  }
+};
+$("#capture-stop").onclick = async () => {
+  try {
+    await api("/api/dgt/recordings/stop", {});
+    await loadRecordings();
+  } catch (error) {
+    report(error);
+  }
+};
+$("#capture-next").onclick = async () => {
+  try {
+    await api("/api/dgt/recordings/mark", {
+      label: `Début étape ${captureStep + 1} : ${captureSteps[captureStep]}`,
+    });
+    $("#capture-instruction").textContent =
+      `Étape marquée. ${captureSteps[captureStep]} Cliquez sur « Étape suivante » après l'action.`;
+  } catch (error) {
+    report(error);
+  }
+};
+$("#capture-skip").onclick = async () => {
+  try {
+    await api("/api/dgt/recordings/mark", { label: `Fin / passage de l'étape ${captureStep + 1}` });
+    captureStep = Math.min(captureStep + 1, captureSteps.length - 1);
+    renderCaptureStep();
+  } catch (error) {
+    report(error);
+  }
+};
+$("#capture-mark").onclick = async () => {
+  try {
+    await api("/api/dgt/recordings/mark", { label: $("#capture-marker").value });
+    $("#capture-marker").value = "";
+  } catch (error) {
+    report(error);
+  }
+};
+let diagnosticsPending = false;
+async function refreshDiagnostics() {
+  if (diagnosticsPending) return;
+  diagnosticsPending = true;
+  try {
+    const data = await api("/api/dgt/diagnostics");
+    renderRecording(data.recording);
+    $("#diagnostic-summary").textContent =
+      `${data.boards.filter((b) => b.connected).length}/${data.boards.length} liaisons ouvertes.`;
+    $("#diagnostics tbody").innerHTML = data.boards
+      .map(
+        (b) => `<tr>
+      <td>${b.tableId} · ${escapeHtml(b.path)}</td>
+      <td>${escapeHtml(b.serial ?? "?")} / v${escapeHtml(b.version ?? "?")}</td>
+      <td>${b.connected ? "Ouverte" : "Fermée"} · batterie ${escapeHtml({ unknown: "inconnue", available: "reçue", unresponsive: "sans réponse, nouvelle tentative périodique" }[b.batteryStatus])}<br>Dernière mesure : ${escapeHtml(b.lastBatteryReceivedAt ?? "jamais")}<br>Dernière tentative : ${escapeHtml(b.lastBatteryAttemptAt ?? "jamais")}</td>
+      <td>${escapeHtml(b.lastPositionAt ?? "Jamais")}</td>
+      <td>${b.messages} / ${b.rxBytes}</td>
+      <td>${b.lastResponseMs ?? "?"} / ${b.maxResponseMs}</td>
+      <td>${b.timeouts} / ${b.protocolErrors} · ${b.retries ?? 0} relances</td>
+      <td>${escapeHtml(b.lastError ?? "")}</td></tr>`,
+      )
+      .join("");
+  } catch (error) {
+    report(error);
+  } finally {
+    diagnosticsPending = false;
+  }
+}
+
 function connect() {
   const socket = new WebSocket(`ws://${location.host}/api/stream`);
   socket.onmessage = (event) => {
@@ -225,3 +422,10 @@ function connect() {
 setState(await api("/api/config"));
 renderDiscovered();
 connect();
+try {
+  await loadRecordings();
+  await refreshDiagnostics();
+} catch (error) {
+  report(error);
+}
+setInterval(() => void refreshDiagnostics(), 2000);

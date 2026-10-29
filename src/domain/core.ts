@@ -33,7 +33,8 @@ export class BroadcastCore {
   enroll(tableId: number, physicalId: string, confirmE4 = true): LogicalTable {
     validateTableId(tableId);
     if (!confirmE4) throw new Error("Enrollment requires the white king on E4");
-    if (!/^DGT_BT_[A-Za-z0-9_-]+$/.test(physicalId)) throw new Error("Invalid physical board id");
+    if (!/^DGT_(?:BT|USB)_[A-Za-z0-9_-]+$/.test(physicalId))
+      throw new Error("Invalid physical board id");
     const table = this.getTable(tableId);
     for (const other of this.state.tables) {
       if (other !== table && other.physicalId === physicalId) this.dissociate(other.id);
@@ -52,6 +53,11 @@ export class BroadcastCore {
   }
   manualAssociate(tableId: number, physicalId: string): LogicalTable {
     return this.enroll(tableId, physicalId, true);
+  }
+  ensureTableCount(count: number): void {
+    validateTableId(count);
+    for (let id = this.state.tables.length + 1; id <= count; id++)
+      this.state.tables.push(this.table(id));
   }
   getTable(id: number): LogicalTable {
     validateTableId(id);

@@ -41,6 +41,7 @@ export function sideToMove(fen) {
 }
 
 export function formatClock(seconds) {
+  if (seconds === null || seconds === undefined) return "--:--";
   const total = Math.max(0, Math.floor(Number(seconds) || 0));
   const h = Math.floor(total / 3600);
   const m = Math.floor((total % 3600) / 60);

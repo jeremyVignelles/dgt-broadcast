@@ -10,8 +10,9 @@ export function toPgn(game: GameState, event = "DGT Broadcast"): string {
     tag("Round", String(game.tableId)),
     tag("White", game.white?.name ?? "Unknown"),
     tag("Black", game.black?.name ?? "Unknown"),
+    tag("Result", game.result ?? "*"),
     "",
-    game.lastMove ?? "*",
+    [game.lastMove, game.result ?? "*"].filter(Boolean).join(" "),
     "",
   ].join("\n");
 }

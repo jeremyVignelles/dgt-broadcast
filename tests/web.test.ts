@@ -63,6 +63,8 @@ describe("board helpers", () => {
     expect(formatClock(65)).toBe("1:05");
     expect(formatClock(3725)).toBe("1:02:05");
     expect(formatClock(-3)).toBe("0:00");
+    expect(formatClock(null)).toBe("--:--");
+    expect(formatClock(undefined)).toBe("--:--");
   });
 });
 

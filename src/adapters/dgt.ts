@@ -1,96 +1,14 @@
 import { Chess } from "chess.js";
-import DgtchessBoard from "dgtchess";
 import { EventEmitter } from "node:events";
+import { DgtClient, RequestTimeout } from "../dgt/client.ts";
+import { Command, RESULTS, piece, squareName } from "../dgt/protocol.ts";
+import { SerialTransport } from "../dgt/serial.ts";
+import type { ByteTransport } from "../dgt/client.ts";
+import type { ClockReading, ClockSide, DecodedMessage, Position } from "../dgt/protocol.ts";
 import type { GameState } from "../domain/types.ts";
-import type { Piece, Position } from "dgtchess";
 
-const PIECE_TO_FEN: Record<Piece["role"], string> = {
-  pawn: "p",
-  rook: "r",
-  knight: "n",
-  bishop: "b",
-  queen: "q",
-  king: "k",
-};
-const SQUARE = /^[a-h][1-8]$/;
-const SQUARES = Array.from({ length: 64 }, (_, index) => {
-  const file = String.fromCharCode(97 + (index % 8));
-  const rank = 8 - Math.floor(index / 8);
-  return `${file}${rank}`;
-});
-const DGT_PIECES: Record<number, Piece | null> = {
-  0x0: null,
-  0x1: { role: "pawn", color: "white" },
-  0x2: { role: "rook", color: "white" },
-  0x3: { role: "knight", color: "white" },
-  0x4: { role: "bishop", color: "white" },
-  0x5: { role: "king", color: "white" },
-  0x6: { role: "queen", color: "white" },
-  0x7: { role: "pawn", color: "black" },
-  0x8: { role: "rook", color: "black" },
-  0x9: { role: "knight", color: "black" },
-  0xa: { role: "bishop", color: "black" },
-  0xb: { role: "king", color: "black" },
-  0xc: { role: "queen", color: "black" },
-  0xd: null,
-  0xe: null,
-  0xf: null,
-};
-const DEFAULT_SETTLE_MS = 250;
-const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
-
-export interface DgtBoard {
-  reset(): Promise<{ serialNr: string; version: string; position: Position }>;
-  getReader(): {
-    read(): Promise<{ value?: Uint8Array; done: boolean }>;
-  };
-}
-export type DgtBoardFactory = (path: string) => DgtBoard;
-
-/** Decodes the raw 5-byte DGT field-update messages returned by dgtchess on Node.js. */
-export class DgtUpdateParser {
-  private pending = new Uint8Array();
-
-  push(chunk: Uint8Array): Position[] {
-    const bytes = new Uint8Array(this.pending.length + chunk.length);
-    bytes.set(this.pending);
-    bytes.set(chunk, this.pending.length);
-    const updates: Position[] = [];
-    let offset = 0;
-    while (bytes.length - offset >= 3) {
-      const length = ((bytes[offset + 1] & 0x7f) << 7) | (bytes[offset + 2] & 0x7f);
-      if (length < 3) {
-        offset++;
-        continue;
-      }
-      if (bytes.length - offset < length) break;
-      if (bytes[offset] === 0x86 && length === 5) {
-        const index = bytes[offset + 3];
-        const pieceCode = bytes[offset + 4];
-        if (index >= SQUARES.length || !Object.hasOwn(DGT_PIECES, pieceCode)) {
-          throw new Error("Trame de mise à jour DGT invalide.");
-        }
-        updates.push(new Map([[SQUARES[index], DGT_PIECES[pieceCode]]]));
-      }
-      offset += length;
-    }
-    this.pending = bytes.slice(offset);
-    return updates;
-  }
-}
-
-interface Session {
-  tableId: number;
-  physicalId: string;
-  position: Position;
-  chess?: Chess;
-  reader?: { read(): Promise<{ value?: Uint8Array; done: boolean }> };
-  parser: DgtUpdateParser;
-  settleTimer?: NodeJS.Timeout;
-  lastFen: string;
-  lastMove?: string;
-  failed: boolean;
-}
+const PIECE_TO_FEN = { pawn: "p", rook: "r", knight: "n", bishop: "b", queen: "q", king: "k" };
+const INITIAL_PLACEMENT = new Chess().fen().split(" ")[0];
 
 export function positionPlacement(position: Position): string {
   const rows: string[] = [];
@@ -98,200 +16,392 @@ export function positionPlacement(position: Position): string {
     let row = "";
     let empty = 0;
     for (let file = 0; file < 8; file++) {
-      const square = `${String.fromCharCode(97 + file)}${rank}`;
-      const piece = position.get(square);
-      if (!piece) {
+      const p = position.get(`${String.fromCharCode(97 + file)}${rank}`);
+      if (!p) {
         empty++;
         continue;
       }
-      if (empty > 0) row += String(empty);
+      if (empty) row += empty;
       empty = 0;
-      const letter = PIECE_TO_FEN[piece.role];
-      if (!letter) throw new Error(`Pièce DGT inconnue sur ${square}`);
-      row += piece.color === "white" ? letter.toUpperCase() : letter;
+      const letter = PIECE_TO_FEN[p.role];
+      row += p.color === "white" ? letter.toUpperCase() : letter;
     }
-    if (empty > 0) row += String(empty);
+    if (empty) row += empty;
     rows.push(row);
   }
   return rows.join("/");
 }
-
-function fenForPlacement(placement: string, turn = "w"): string {
-  return `${placement} ${turn} - - 0 1`;
+function placement(codes: number[], rotated: boolean): string {
+  return positionPlacement(
+    new Map(codes.map((code, i) => [squareName(rotated ? 63 - i : i), piece(code)])),
+  );
 }
-
-function placementFromFen(fen: string): string {
-  return fen.split(" ")[0];
-}
-
-function initialChess(position: Position): Chess | undefined {
-  const placement = positionPlacement(position);
-  if (placement === placementFromFen(new Chess().fen())) return new Chess();
-  try {
-    return new Chess(fenForPlacement(placement));
-  } catch {
-    return undefined;
-  }
-}
-
-function inferMove(
-  chess: Chess,
-  placement: string,
-): { chess: Chess; lastMove: string } | undefined {
+function inferMove(chess: Chess, target: string): { chess: Chess; lastMove: string } | undefined {
   for (const move of chess.moves({ verbose: true })) {
     const candidate = new Chess(chess.fen());
     candidate.move(move);
-    if (placementFromFen(candidate.fen()) === placement) {
-      return {
-        chess: candidate,
-        lastMove: `${move.from}${move.to}${move.promotion ?? ""}`,
-      };
-    }
+    if (candidate.fen().split(" ")[0] === target)
+      return { chess: candidate, lastMove: `${move.from}${move.to}${move.promotion ?? ""}` };
   }
 }
-
-function connectionError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
+interface Session {
+  tableId: number;
+  physicalId: string;
+  path: string;
+  client: DgtClient;
+  connected: boolean;
+  codes?: number[];
+  rotated: boolean;
+  chess?: Chess;
+  clock?: ClockReading;
+  whiteClockSide?: ClockSide;
+  settleTimer?: NodeJS.Timeout;
+  pollTimer?: NodeJS.Timeout;
+  polling: boolean;
+  failures: number;
+  startedAt: string;
+  lastPositionAt?: string;
+  lastClockAt?: number;
+  serial?: string;
+  version?: string;
+  batteryStatus: "unknown" | "available" | "unresponsive";
+  lastBatteryAt?: number;
+  lastBatteryReceivedAt?: string;
+  lastIdentityAt?: number;
+  refreshPromise?: Promise<void>;
+  lastError?: string;
 }
 
-/** Reads the DGT board-dump and update-board stream supplied by dgtchess. */
 export class DgtTransport extends EventEmitter {
   private readonly sessions = new Map<number, Session>();
-  private readonly createBoard: DgtBoardFactory;
+  private readonly connections = new Map<
+    number,
+    { physicalId: string; path: string; promise: Promise<void> }
+  >();
+  private readonly createTransport: (path: string) => ByteTransport;
   private readonly settleMs: number;
-  private readonly connectTimeoutMs: number;
+  private readonly pollMs: number;
 
   constructor(
     options: {
-      createBoard?: DgtBoardFactory;
+      createTransport?: (path: string) => ByteTransport;
       settleMs?: number;
-      connectTimeoutMs?: number;
+      pollMs?: number;
     } = {},
   ) {
     super();
-    this.createBoard = options.createBoard ?? ((path) => new DgtchessBoard(path));
-    this.settleMs = options.settleMs ?? DEFAULT_SETTLE_MS;
-    this.connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
+    this.createTransport = options.createTransport ?? ((path) => new SerialTransport(path));
+    this.settleMs = options.settleMs ?? 350;
+    this.pollMs = options.pollMs ?? 10_000;
   }
 
-  async connect(tableId: number, physicalId: string, path: string): Promise<void> {
-    const current = this.sessions.get(tableId);
-    if (current) {
-      if (current.failed)
-        throw new Error("Échec précédent : redémarrez le serveur avant de réessayer.");
-      if (current.physicalId !== physicalId)
-        throw new Error(
-          "Un autre échiquier est déjà ouvert sur cette table ; redémarrez le serveur.",
-        );
-      return;
+  connect(tableId: number, physicalId: string, path: string): Promise<void> {
+    const pending = this.connections.get(tableId);
+    if (pending) {
+      if (pending.physicalId !== physicalId || pending.path !== path)
+        return Promise.reject(new Error("Une connexion est déjà en cours sur cette table"));
+      return pending.promise;
     }
-    const board = this.createBoard(path);
-    const session: Session = {
+    const promise = this.connectSession(tableId, physicalId, path).finally(() =>
+      this.connections.delete(tableId),
+    );
+    this.connections.set(tableId, { physicalId, path, promise });
+    return promise;
+  }
+  private async connectSession(tableId: number, physicalId: string, path: string): Promise<void> {
+    const current = this.sessions.get(tableId);
+    if (current?.connected && current.physicalId === physicalId && current.path === path) return;
+    await this.releaseSession(tableId);
+    if ([...this.sessions.values()].some((s) => s.tableId !== tableId && s.path === path))
+      throw new Error("Ce port série est déjà utilisé par une autre table");
+    const client = new DgtClient(this.createTransport(path));
+    const s: Session = {
       tableId,
       physicalId,
-      position: new Map(),
-      lastFen: "",
-      parser: new DgtUpdateParser(),
-      failed: false,
+      path,
+      client,
+      connected: false,
+      rotated: false,
+      whiteClockSide: "left",
+      polling: false,
+      failures: 0,
+      startedAt: new Date().toISOString(),
+      batteryStatus: "unknown",
     };
-    this.sessions.set(tableId, session);
-    this.emitState(session, { status: "reconnecting", battery: undefined });
-
-    try {
-      const dump = await this.withTimeout(board.reset(), this.connectTimeoutMs);
-      session.position = new Map(dump.position);
-      session.chess = initialChess(session.position);
-      session.lastFen =
-        session.chess?.fen() ?? fenForPlacement(positionPlacement(session.position));
-      this.emitState(session, {
-        fen: session.lastFen,
-        lastMove: undefined,
-        status: "connected",
-        battery: undefined,
-        whiteClock: 0,
-        blackClock: 0,
+    this.sessions.set(tableId, s);
+    client.on("raw", (event) => this.emit("raw", { tableId, physicalId, ...event }));
+    client.on("message", (message: DecodedMessage) => {
+      this.observe(s, message);
+      this.emit("observation", {
+        tableId,
+        physicalId,
+        message,
+        receivedAt: new Date().toISOString(),
       });
-      session.reader = board.getReader();
-      void this.readUpdates(session);
-    } catch (error) {
-      session.failed = true;
-      this.emitState(session, { status: "disconnected", battery: undefined });
-      throw connectionError(error);
-    }
-  }
-
-  private async withTimeout<T>(operation: Promise<T>, timeoutMs: number): Promise<T> {
-    let timer: NodeJS.Timeout | undefined;
-    try {
-      return await Promise.race([
-        operation,
-        new Promise<T>((_, reject) => {
-          timer = setTimeout(
-            () => reject(new Error("Délai dépassé pendant la lecture de l'échiquier DGT.")),
-            timeoutMs,
-          );
-        }),
-      ]);
-    } finally {
-      if (timer) clearTimeout(timer);
-    }
-  }
-
-  private async readUpdates(session: Session): Promise<void> {
-    try {
-      while (true) {
-        const { value, done } = await session.reader!.read();
-        if (done) throw new Error("Le flux de l'échiquier DGT est terminé.");
-        if (!value) continue;
-        const updates = session.parser.push(value);
-        if (updates.length === 0) continue;
-        for (const update of updates) {
-          for (const [square, piece] of update) {
-            if (!SQUARE.test(square)) throw new Error(`Case reçue invalide : ${square}`);
-            session.position.set(square, piece);
-          }
-        }
-        if (session.settleTimer) clearTimeout(session.settleTimer);
-        session.settleTimer = setTimeout(() => this.publishStablePosition(session), this.settleMs);
-      }
-    } catch (error) {
-      session.failed = true;
-      this.emitState(session, { status: "disconnected", battery: undefined });
-      this.emit("board-error", {
-        tableId: session.tableId,
-        error: connectionError(error),
-      });
-    }
-  }
-
-  private publishStablePosition(session: Session): void {
-    session.settleTimer = undefined;
-    const placement = positionPlacement(session.position);
-    let fen: string;
-    if (session.chess && placement !== placementFromFen(session.chess.fen())) {
-      const inferred = inferMove(session.chess, placement);
-      if (inferred) {
-        session.chess = inferred.chess;
-        session.lastMove = inferred.lastMove;
-        fen = session.chess.fen();
-      } else {
-        session.chess = undefined;
-        session.lastMove = undefined;
-        fen = fenForPlacement(placement);
-      }
-    } else {
-      session.chess ??= initialChess(session.position);
-      fen = session.chess?.fen() ?? fenForPlacement(placement);
-    }
-    if (fen === session.lastFen) return;
-    session.lastFen = fen;
-    this.emitState(session, { fen, lastMove: session.lastMove, battery: undefined });
-  }
-
-  private emitState(session: Session, patch: Partial<GameState>): void {
-    this.emit("state", {
-      tableId: session.tableId,
-      patch: { ...patch, physicalId: session.physicalId },
     });
+    client.on("protocol-error", (error: Error) => this.report(s, error));
+    client.on("retry", ({ command, attempt }) =>
+      this.emit("retry", { tableId, command, attempt, receivedAt: new Date().toISOString() }),
+    );
+    client.on("fault", (error: Error) => {
+      this.report(s, error);
+      this.markDisconnected(s);
+    });
+    client.on("closed", () => this.markDisconnected(s));
+    this.emitState(s, {
+      status: "reconnecting",
+      battery: undefined,
+      whiteClock: null,
+      blackClock: null,
+      clock: undefined,
+      whiteClockSide: s.whiteClockSide,
+      result: undefined,
+      specialPieces: [],
+      boardBattery: undefined,
+      lastMove: undefined,
+      positionStatus: "unresolved",
+    });
+    try {
+      await client.open();
+      await client.send(Command.idle);
+      // RFCOMM opens before its radio link is ready; the first response can take several seconds.
+      s.connected = true;
+      await client.send(Command.niceUpdates);
+      await this.optionalRead(s, () => client.readPosition(6000));
+      this.emitState(s, { status: s.codes ? "connected" : "degraded" });
+      await this.readIdentity(s);
+      await this.readClockIfQuiet(s);
+      await this.readBattery(s);
+      s.pollTimer = setInterval(
+        () =>
+          void this.poll(s).catch((error: unknown) =>
+            this.report(s, error instanceof Error ? error : new Error(String(error))),
+          ),
+        this.pollMs,
+      );
+    } catch (error) {
+      this.report(s, error instanceof Error ? error : new Error(String(error)));
+      this.markDisconnected(s);
+      await client.close();
+      throw error;
+    }
+  }
+  private emitState(s: Session, patch: Partial<GameState>): void {
+    this.emit("state", { tableId: s.tableId, patch: { ...patch, physicalId: s.physicalId } });
+    if (patch.status === "reconnecting" || patch.status === "disconnected")
+      this.emit("connection", {
+        tableId: s.tableId,
+        physicalId: s.physicalId,
+        path: s.path,
+        status: patch.status,
+      });
+  }
+  private report(s: Session, error: Error): void {
+    s.lastError = error.message;
+    this.emit("board-error", { tableId: s.tableId, error });
+  }
+  private markDisconnected(s: Session): void {
+    s.connected = false;
+    if (s.settleTimer) clearTimeout(s.settleTimer);
+    if (s.pollTimer) clearInterval(s.pollTimer);
+    this.emitState(s, {
+      status: "disconnected",
+      whiteClock: null,
+      blackClock: null,
+      clock: undefined,
+    });
+  }
+  private observe(s: Session, message: DecodedMessage): void {
+    if (message.kind === "position") {
+      const changed = !s.codes || s.codes.some((v, i) => v !== message.codes[i]);
+      s.codes = [...message.codes];
+      s.lastPositionAt = new Date().toISOString();
+      s.failures = 0;
+      if (s.connected) this.emitState(s, { status: "connected" });
+      if (changed) this.publishPosition(s);
+    } else if (message.kind === "square" && s.codes) {
+      s.codes[message.index] = message.code;
+      if (s.settleTimer) clearTimeout(s.settleTimer);
+      s.settleTimer = setTimeout(() => this.publishPosition(s), this.settleMs);
+    } else if (message.kind === "clock") {
+      s.lastClockAt = Date.now();
+      s.clock = message.clock;
+      this.publishClock(s);
+    } else if (message.kind === "battery") {
+      s.batteryStatus = "available";
+      s.lastBatteryReceivedAt = new Date().toISOString();
+      this.emitState(s, { battery: message.battery.percent, boardBattery: message.battery });
+    } else if (message.kind === "serial") {
+      s.serial = message.serial;
+    } else if (message.kind === "version") {
+      s.version = message.version;
+    }
+  }
+  private publishClock(s: Session): void {
+    const c = s.clock;
+    const white = s.whiteClockSide;
+    this.emitState(s, {
+      clock: c,
+      whiteClockSide: white,
+      whiteClock: c?.connected && white ? c[white].seconds : null,
+      blackClock: c?.connected && white ? c[white === "left" ? "right" : "left"].seconds : null,
+    });
+  }
+  private publishPosition(s: Session): void {
+    if (s.settleTimer) clearTimeout(s.settleTimer);
+    s.settleTimer = undefined;
+    if (!s.codes) return;
+    const normal = placement(s.codes, false);
+    const reversed = placement(s.codes, true);
+    if (normal === INITIAL_PLACEMENT || reversed === INITIAL_PLACEMENT) {
+      s.rotated = reversed === INITIAL_PLACEMENT;
+    }
+    const target = placement(s.codes, s.rotated);
+    const initial = target === INITIAL_PLACEMENT;
+    let lastMove: string | undefined;
+    let positionStatus: GameState["positionStatus"] = "unresolved";
+    if (initial) {
+      s.chess = new Chess();
+      positionStatus = "initial";
+    } else if (s.chess) {
+      if (target === s.chess.fen().split(" ")[0]) {
+        positionStatus = "tracked";
+      } else {
+        const inferred = inferMove(s.chess, target);
+        if (inferred) {
+          s.chess = inferred.chess;
+          lastMove = inferred.lastMove;
+          positionStatus = "tracked";
+        }
+        // Keep the last verified game through physical intermediate positions.
+      }
+    }
+    const specialPieces = s.codes.flatMap((code, i) =>
+      RESULTS[code] ? [{ square: squareName(s.rotated ? 63 - i : i), result: RESULTS[code] }] : [],
+    );
+    const results = new Set(specialPieces.map((p) => p.result));
+    this.emitState(s, {
+      fen: positionStatus === "unresolved" ? `${target} w - - 0 1` : s.chess!.fen(),
+      positionStatus,
+      orientation: s.rotated ? "rotated" : "normal",
+      ...(lastMove || positionStatus !== "tracked" ? { lastMove } : {}),
+      specialPieces,
+      result: results.size === 1 ? specialPieces[0].result : undefined,
+      resultStatus: results.size > 1 ? "conflicting" : results.size === 1 ? "reported" : "none",
+    });
+  }
+  private async optionalRead(s: Session, read: () => Promise<unknown>): Promise<boolean> {
+    try {
+      await read();
+      return true;
+    } catch (error) {
+      if (!(error instanceof RequestTimeout)) throw error;
+      this.emit("request-timeout", { tableId: s.tableId, message: error.message });
+      return false;
+    }
+  }
+  private async readBattery(s: Session): Promise<void> {
+    s.lastBatteryAt = Date.now();
+    if (!(await this.optionalRead(s, () => s.client.readBattery())))
+      s.batteryStatus = "unresponsive";
+  }
+  private async readIdentity(s: Session): Promise<void> {
+    s.lastIdentityAt = Date.now();
+    if (!s.serial) await this.optionalRead(s, () => s.client.request(Command.serial, "serial"));
+    if (!s.version) await this.optionalRead(s, () => s.client.request(Command.version, "version"));
+  }
+  private async readClockIfQuiet(s: Session): Promise<void> {
+    if (s.lastClockAt === undefined || Date.now() - s.lastClockAt >= 15_000)
+      await this.optionalRead(s, () => s.client.readClock());
+  }
+  private async poll(s: Session): Promise<void> {
+    if (!s.connected || s.polling || s.refreshPromise) return;
+    s.polling = true;
+    try {
+      if (!(await this.optionalRead(s, () => s.client.readPosition()))) {
+        s.failures++;
+        const lastRx = s.client.metrics.lastRxAt;
+        if (!s.codes || !lastRx || Date.now() - Date.parse(lastRx) >= 30_000)
+          this.emitState(s, { status: "degraded" });
+      }
+      await this.readClockIfQuiet(s);
+      if (Date.now() - (s.lastBatteryAt ?? 0) >= 60_000) await this.readBattery(s);
+      if ((!s.serial || !s.version) && Date.now() - (s.lastIdentityAt ?? 0) >= 60_000)
+        await this.readIdentity(s);
+    } catch (error) {
+      s.failures++;
+      this.report(s, error instanceof Error ? error : new Error(String(error)));
+      if (s.connected) this.emitState(s, { status: "degraded" });
+    } finally {
+      s.polling = false;
+      this.emit("diagnostics", this.diagnostics());
+    }
+  }
+  private session(tableId: number): Session {
+    const s = this.sessions.get(tableId);
+    if (!s?.connected) throw new Error("Échiquier non connecté");
+    return s;
+  }
+  async readHistory(tableId: number) {
+    return this.session(tableId).client.readHistory();
+  }
+  async refresh(tableId: number): Promise<void> {
+    const s = this.session(tableId);
+    s.refreshPromise ??= (async () => {
+      await this.optionalRead(s, () => s.client.readPosition());
+      await this.optionalRead(s, () => s.client.readClock());
+      await this.readBattery(s);
+      await this.readIdentity(s);
+    })().finally(() => {
+      s.refreshPromise = undefined;
+      this.emit("diagnostics", this.diagnostics());
+    });
+    await s.refreshPromise;
+  }
+  setClockSide(tableId: number, side: ClockSide): void {
+    if (side !== "left" && side !== "right") throw new Error("Côté de pendule invalide");
+    const s = this.session(tableId);
+    s.whiteClockSide = side;
+    this.publishClock(s);
+  }
+  diagnostics() {
+    return [...this.sessions.values()].map((s) => ({
+      tableId: s.tableId,
+      physicalId: s.physicalId,
+      path: s.path,
+      connected: s.connected,
+      startedAt: s.startedAt,
+      lastPositionAt: s.lastPositionAt,
+      lastClockReceivedAt:
+        s.lastClockAt === undefined ? undefined : new Date(s.lastClockAt).toISOString(),
+      serial: s.serial,
+      version: s.version,
+      batteryStatus: s.batteryStatus,
+      lastBatteryAttemptAt: s.lastBatteryAt ? new Date(s.lastBatteryAt).toISOString() : undefined,
+      lastBatteryReceivedAt: s.lastBatteryReceivedAt,
+      lastError: s.lastError,
+      consecutiveFailures: s.failures,
+      ...s.client.metrics,
+    }));
+  }
+  async disconnect(tableId: number): Promise<void> {
+    const pending = this.connections.get(tableId);
+    if (pending)
+      await pending.promise.catch((error: unknown) => {
+        const s = this.sessions.get(tableId);
+        if (s) this.report(s, error instanceof Error ? error : new Error(String(error)));
+      });
+    await this.releaseSession(tableId);
+  }
+  private async releaseSession(tableId: number): Promise<void> {
+    const s = this.sessions.get(tableId);
+    if (!s) return;
+    this.markDisconnected(s);
+    await s.client.close();
+    this.sessions.delete(tableId);
+  }
+  async close(): Promise<void> {
+    await Promise.allSettled([...this.connections.values()].map((c) => c.promise));
+    await Promise.all([...this.sessions.keys()].map((id) => this.disconnect(id)));
   }
 }

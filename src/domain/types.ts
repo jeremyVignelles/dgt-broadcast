@@ -1,3 +1,5 @@
+import type { BatteryReading, ClockReading, ClockSide, Result } from "../dgt/protocol.ts";
+
 export type ConnectionStatus =
   | "discovered"
   | "enrolling"
@@ -20,8 +22,16 @@ export interface GameState {
   lastMove?: string;
   white?: Player;
   black?: Player;
-  whiteClock: number;
-  blackClock: number;
+  whiteClock: number | null;
+  blackClock: number | null;
+  clock?: ClockReading;
+  whiteClockSide?: ClockSide;
+  boardBattery?: BatteryReading;
+  result?: Result;
+  resultStatus?: "none" | "reported" | "conflicting";
+  specialPieces?: Array<{ square: string; result: Result }>;
+  positionStatus?: "initial" | "tracked" | "unresolved";
+  orientation?: "normal" | "rotated";
   battery?: number;
   status: ConnectionStatus;
   updatedAt: string;
