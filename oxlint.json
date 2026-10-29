@@ -1,0 +1,1 @@
+{ "rules": { "correctness": "warn", "suspicious": "warn", "perf": "warn" } }

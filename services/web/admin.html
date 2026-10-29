@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>DGT Broadcast – Configuration</title>
+    <link rel="stylesheet" href="/admin.css" />
+  </head>
+  <body>
+    <header>
+      <h1>DGT Broadcast <small>Configuration</small></h1>
+      <a class="button" href="/" target="_blank" rel="noopener">Ouvrir l'affichage ↗</a>
+    </header>
+    <main>
+      <section>
+        <h2>Découverte Bluetooth</h2>
+        <p class="hint">
+          Allumez les échiquiers (ils apparaissent sous le nom <code>DGT_BT_*</code>), puis lancez
+          le scan.
+        </p>
+        <div class="row">
+          <button id="scan">Scanner les échiquiers</button>
+          <span id="scan-status" role="status"></span>
+        </div>
+        <ul id="scan-errors" class="errors"></ul>
+        <table id="discovered">
+          <thead>
+            <tr>
+              <th>Échiquier</th>
+              <th>Adresse</th>
+              <th>Source</th>
+              <th>Associer à la table</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2>Tables</h2>
+        <table id="tables">
+          <thead>
+            <tr>
+              <th>Table</th>
+              <th>Échiquier associé</th>
+              <th>État</th>
+              <th>Batterie</th>
+              <th>Affichée</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </section>
+
+      <section>
+        <details>
+          <summary><h2>Simulateur</h2></summary>
+          <p class="hint">Pilote les échiquiers simulés pour tester l'affichage sans matériel.</p>
+          <table id="simulator">
+            <thead>
+              <tr>
+                <th>Table</th>
+                <th>Connexion</th>
+                <th>Batterie (%)</th>
+                <th>Partie</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </details>
+      </section>
+    </main>
+    <script type="module" src="/admin.js"></script>
+  </body>
+</html>
