@@ -166,7 +166,7 @@ export type DecodedMessage =
   | { kind: "clock-ack"; ack: number[] }
   | { kind: "clock-empty" }
   | { kind: "battery"; battery: BatteryReading }
-  | { kind: "history"; entries: HistoryEntry[] }
+  | { kind: "history"; entries: HistoryEntry[]; warnings: string[]; raw: number[] }
   | { kind: "serial"; serial: string }
   | { kind: "version"; version: string }
   | { kind: "unknown"; id: number; payload: number[] };
@@ -294,8 +294,20 @@ export function decode(frame: Frame): DecodedMessage {
     case Message.version:
       size(2);
       return { kind: "version", version: `${p[0]}.${p[1]}` };
-    case Message.history:
-      return { kind: "history", entries: decodeHistory(p) };
+    case Message.history: {
+      // The cyclic EEPROM can begin with the square byte of an overwritten entry.
+      const partialStart = p.length === 0x1f00 && p[0] > 0 && p[0] < 0x40;
+      return {
+        kind: "history",
+        entries: decodeHistory(partialStart ? p.slice(1) : p),
+        warnings: partialStart
+          ? [
+              "Mémoire circulaire pleine : premier octet orphelin ignoré ; début d'historique incomplet.",
+            ]
+          : [],
+        raw: [...p],
+      };
+    }
     default:
       return { kind: "unknown", id: frame.id, payload: [...p] };
   }

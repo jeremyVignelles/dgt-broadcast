@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Command, Message } from "../src/dgt/protocol.ts";
+import { Command, Message, squareIndex } from "../src/dgt/protocol.ts";
 import { DgtTransport } from "../src/adapters/dgt.ts";
 import { ProtocolSimulator, INITIAL_CODES } from "../src/dgt/simulator.ts";
 
@@ -24,6 +24,62 @@ function setup(options: { pollMs?: number } = {}) {
 const settle = () => new Promise((resolve) => setTimeout(resolve, 15));
 
 describe("DGT hardware adapter", () => {
+  it.each([
+    ["e4", "d5", "1-0"],
+    ["d4", "e5", "0-1"],
+    ["e4", "e5", "1/2-1/2"],
+    ["d4", "d5", "1/2-1/2"],
+  ])(
+    "recognizes kings on %s and %s as %s in either color order and orientation",
+    async (a, b, result) => {
+      for (const rotated of [false, true]) {
+        for (const swap of [false, true]) {
+          const { simulator, transport, latest } = setup();
+          if (rotated) simulator.codes.reverse();
+          await transport.connect(1, "DGT_BT_TEST", "test");
+          const index = (square: string) =>
+            rotated ? 63 - squareIndex(square) : squareIndex(square);
+          simulator.changeSquare(index("e1"), 0);
+          simulator.changeSquare(index("e8"), 0);
+          simulator.changeSquare(index(a), swap ? 11 : 5);
+          simulator.changeSquare(index(b), swap ? 5 : 11);
+          await settle();
+          expect(latest()).toMatchObject({ result, resultStatus: "reported", specialPieces: [] });
+          simulator.changeSquare(index(b), 0);
+          await settle();
+          expect(latest().result).toBe(result);
+          expect(latest().resultStatus).toBe("reported");
+          await transport.disconnect(1);
+          await transport.connect(1, "DGT_BT_TEST", "test");
+          expect(latest().result).toBe(result);
+          transport.newGame(1);
+          expect(latest().result).toBeUndefined();
+          expect(latest().resultStatus).toBe("none");
+          await transport.close();
+        }
+      }
+    },
+  );
+  it("does not declare results for other adjacent squares or duplicate kings and reports conflicting declarations", async () => {
+    const { simulator, transport, latest } = setup();
+    simulator.codes.fill(0);
+    simulator.codes[squareIndex("e4")] = 5;
+    simulator.codes[squareIndex("d4")] = 11;
+    await transport.connect(1, "DGT_BT_TEST", "test");
+    expect(latest().result).toBeUndefined();
+    simulator.changeSquare(squareIndex("d4"), 0);
+    simulator.changeSquare(squareIndex("d5"), 5);
+    await settle();
+    expect(latest().result).toBeUndefined();
+    simulator.changeSquare(squareIndex("d5"), 11);
+    simulator.changeSquare(squareIndex("a1"), 15);
+    await settle();
+    expect(latest()).toMatchObject({ result: undefined, resultStatus: "conflicting" });
+    simulator.changeSquare(squareIndex("a1"), 14);
+    await settle();
+    expect(latest()).toMatchObject({ result: undefined, resultStatus: "conflicting" });
+    expect(() => transport.newGame(1)).toThrow(/Retirez/);
+  });
   it("accepts late battery and identity messages without clearing the last measured state", async () => {
     vi.useFakeTimers();
     const { simulator, transport, latest } = setup();
@@ -138,19 +194,16 @@ describe("DGT hardware adapter", () => {
     await settle();
     expect(latest()).toMatchObject({
       lastMove: "e2e4",
-      whiteClockSide: "left",
       whiteClock: 599,
       blackClock: 600,
       fen: "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1",
     });
   });
-  it("maps left to white by default and supports an explicit override", async () => {
+  it("always maps left to white, including when connecting to a running clock", async () => {
     const { simulator, transport, latest } = setup();
     simulator.clock = [0, 9, 0, 0, 8, 0, 17];
     await transport.connect(1, "DGT_BT_TEST", "test");
     expect(latest()).toMatchObject({ whiteClock: 480, blackClock: 540 });
-    transport.setClockSide(1, "right");
-    expect(latest()).toMatchObject({ whiteClock: 540, blackClock: 480 });
     simulator.setClock([0, 0, 0, 0, 0, 0, 0x20]);
     await settle();
     expect(latest()).toMatchObject({ whiteClock: null, clock: { connected: false } });
@@ -163,10 +216,10 @@ describe("DGT hardware adapter", () => {
     await settle();
     simulator.setClock([0, 9, 0x59, 0, 0x10, 0, 17]);
     await settle();
-    expect(latest()).toMatchObject({ whiteClockSide: "left", whiteClock: 600, blackClock: 599 });
+    expect(latest()).toMatchObject({ whiteClock: 600, blackClock: 599 });
     simulator.setClock([0, 9, 0x58, 0, 9, 0x59, 9]);
     await settle();
-    expect(latest()).toMatchObject({ whiteClockSide: "left", whiteClock: 599, blackClock: 598 });
+    expect(latest()).toMatchObject({ whiteClock: 599, blackClock: 598 });
   });
   it("preserves legal context through incomplete manipulations and clears result pieces", async () => {
     const { simulator, transport, latest } = setup();

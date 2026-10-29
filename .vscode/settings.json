@@ -14,5 +14,12 @@
   },
   "[html]": {
     "editor.defaultFormatter": "oxc.oxc-vscode"
+  },
+  "chat.tools.terminal.autoApprove": {
+    "/^npm install$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "npm run format:check": true
   }
 }

@@ -55,8 +55,8 @@ function tableHtml(table) {
   const game = table.game;
   const status = STATUS[game.status] ?? STATUS.disconnected;
   const turn = game.clock
-    ? game.clock.connected && game.clock.running && game.whiteClockSide && game.clock.activeSide
-      ? game.clock.activeSide === game.whiteClockSide
+    ? game.clock.connected && game.clock.running && game.clock.activeSide
+      ? game.clock.activeSide === "left"
         ? "white"
         : "black"
       : undefined

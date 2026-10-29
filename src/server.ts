@@ -57,6 +57,9 @@ const persisted = await store.load();
 if (persisted.tables.length >= 1 && persisted.tables.length <= 32)
   core.state.tables = persisted.tables;
 core.state.meeting = persisted.meeting;
+for (const table of core.state.tables)
+  if (table.physicalId)
+    dgtTransport.restoreResult(table.physicalId, table.game.result, table.game.resultStatus);
 for (const table of core.state.tables) {
   if (table.physicalId && !/^DGT_BT_SIM_\d+$/.test(table.physicalId))
     core.updateGame(table.id, {
@@ -64,7 +67,6 @@ for (const table of core.state.tables) {
       whiteClock: null,
       blackClock: null,
       clock: undefined,
-      whiteClockSide: undefined,
       battery: undefined,
       boardBattery: undefined,
     });
@@ -85,6 +87,8 @@ dgtTransport.on("state", ({ tableId, patch }: { tableId: number; patch: Partial<
   if (core.getTable(tableId).physicalId !== patch.physicalId) return;
   core.updateGame(tableId, patch);
   publish();
+  if (patch.resultStatus !== undefined)
+    void persist().catch((error: unknown) => console.error("Result persistence failed:", error));
 });
 dgtTransport.on("board-error", ({ tableId, error }: { tableId: number; error: Error }) => {
   console.error(`DGT board on table ${tableId}:`, error.message);
@@ -219,14 +223,15 @@ const server = http.createServer(async (req, res) => {
       await dgtTransport.disconnect(b.tableId);
       return json(res, { ok: true });
     }
-    if (url.pathname === "/api/dgt/clock-side" && req.method === "POST") {
-      const b = await body(req);
-      dgtTransport.setClockSide(b.tableId, b.side);
-      return json(res, core.getTable(b.tableId).game);
-    }
     if (url.pathname === "/api/dgt/history" && req.method === "POST") {
       const b = await body(req);
       return json(res, await dgtTransport.readHistory(b.tableId));
+    }
+    if (url.pathname === "/api/dgt/new-game" && req.method === "POST") {
+      const { tableId } = await body(req);
+      dgtTransport.newGame(tableId);
+      await persist();
+      return json(res, core.getTable(tableId).game);
     }
     if (url.pathname === "/api/dgt/refresh" && req.method === "POST") {
       await dgtTransport.refresh((await body(req)).tableId);

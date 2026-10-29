@@ -54,13 +54,8 @@ function renderTables() {
         <td class="${cls}">${label}</td>
         <td>${battery}</td>
         <td><input type="checkbox" data-visible="${t.id}" ${t.visible ? "checked" : ""} /></td>
-        <td><select data-clock-side="${t.id}" ${t.game.status !== "connected" ? "disabled" : ""}>
-          <option value="" disabled ${!t.game.whiteClockSide ? "selected" : ""}>Inconnu / automatique</option>
-          <option value="left" ${t.game.whiteClockSide === "left" ? "selected" : ""}>Gauche</option>
-          <option value="right" ${t.game.whiteClockSide === "right" ? "selected" : ""}>Droite</option>
-        </select></td>
         <td>${t.game.clock?.connected ? `G ${formatClock(t.game.clock.left.seconds)} / D ${formatClock(t.game.clock.right.seconds)} · ${t.game.clock.running ? "marche" : "pause"}` : "Pendule absente / inconnue"}${t.game.result ? ` · ${escapeHtml(t.game.result)}` : ""}${t.game.resultStatus === "conflicting" ? " · Résultats contradictoires" : ""}${t.game.positionStatus === "unresolved" ? " · Position non reconstruite" : ""}</td>
-        <td>${t.physicalId ? `<button class="secondary" data-refresh="${t.id}">Relire les données</button> <button class="secondary" data-history="${t.id}">Historique</button> <button class="secondary" data-disconnect="${t.id}">Déconnecter</button> <button class="secondary" data-dissociate="${t.id}">Dissocier</button>` : ""}</td>
+        <td>${t.physicalId ? `<button class="secondary" data-new-game="${t.id}">Nouvelle partie</button> <button class="secondary" data-refresh="${t.id}">Relire les données</button> <button class="secondary" data-history="${t.id}">Historique</button> <button class="secondary" data-disconnect="${t.id}">Déconnecter</button> <button class="secondary" data-dissociate="${t.id}">Dissocier</button>` : ""}</td>
       </tr>`;
     })
     .join("");
@@ -184,6 +179,8 @@ document.addEventListener("click", async (event) => {
       await api("/api/tables/dissociate", { tableId: Number(dataset.dissociate) });
     } else if (dataset.disconnect) {
       await api("/api/dgt/disconnect", { tableId: Number(dataset.disconnect) });
+    } else if (dataset.newGame) {
+      await api("/api/dgt/new-game", { tableId: Number(dataset.newGame) });
     } else if (dataset.refresh) {
       event.target.disabled = true;
       try {
@@ -193,6 +190,7 @@ document.addEventListener("click", async (event) => {
       }
     } else if (dataset.history) {
       const history = await api("/api/dgt/history", { tableId: Number(dataset.history) });
+      if (history.warnings?.length) report(new Error(history.warnings.join(" ; ")));
       const url = URL.createObjectURL(
         new Blob([JSON.stringify(history, null, 2)], { type: "application/json" }),
       );
@@ -219,9 +217,7 @@ document.addEventListener("click", async (event) => {
 document.addEventListener("change", async (event) => {
   const { dataset, checked, value } = event.target;
   try {
-    if (dataset.clockSide && value) {
-      await api("/api/dgt/clock-side", { tableId: Number(dataset.clockSide), side: value });
-    } else if (dataset.visible) {
+    if (dataset.visible) {
       await api("/api/tables/visibility", { tableId: Number(dataset.visible), visible: checked });
     } else if (dataset.simStatus) {
       await api("/api/simulator/status", { tableId: Number(dataset.simStatus), status: value });

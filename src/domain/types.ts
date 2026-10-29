@@ -1,4 +1,4 @@
-import type { BatteryReading, ClockReading, ClockSide, Result } from "../dgt/protocol.ts";
+import type { BatteryReading, ClockReading, Result } from "../dgt/protocol.ts";
 
 export type ConnectionStatus =
   | "discovered"
@@ -25,7 +25,6 @@ export interface GameState {
   whiteClock: number | null;
   blackClock: number | null;
   clock?: ClockReading;
-  whiteClockSide?: ClockSide;
   boardBattery?: BatteryReading;
   result?: Result;
   resultStatus?: "none" | "reported" | "conflicting";

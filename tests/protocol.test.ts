@@ -44,6 +44,18 @@ describe("DGT framing", () => {
   });
 });
 describe("DGT observations", () => {
+  it("reports a partial oldest EEPROM entry in a full circular buffer without losing raw bytes", () => {
+    const raw = Uint8Array.from([58, ...Array<number>(7934).fill(127), 0x6b]);
+    const message = decode({ id: Message.history, payload: raw });
+    expect(message.kind).toBe("history");
+    if (message.kind !== "history") throw new Error("Expected history");
+    expect(message.warnings).toHaveLength(1);
+    expect(message.raw).toEqual([...raw]);
+    expect(message.entries.at(-1)).toMatchObject({ name: "eof" });
+    expect(() => decode({ id: Message.history, payload: Uint8Array.of(58, 0x6b) })).toThrow(
+      /inconnue/,
+    );
+  });
   it("identifies the decreasing clock side from captured hardware status bytes", () => {
     const left = decode({
       id: Message.clock,

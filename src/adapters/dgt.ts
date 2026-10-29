@@ -4,7 +4,7 @@ import { DgtClient, RequestTimeout } from "../dgt/client.ts";
 import { Command, RESULTS, piece, squareName } from "../dgt/protocol.ts";
 import { SerialTransport } from "../dgt/serial.ts";
 import type { ByteTransport } from "../dgt/client.ts";
-import type { ClockReading, ClockSide, DecodedMessage, Position } from "../dgt/protocol.ts";
+import type { ClockReading, DecodedMessage, Position, Result } from "../dgt/protocol.ts";
 import type { GameState } from "../domain/types.ts";
 
 const PIECE_TO_FEN = { pawn: "p", rook: "r", knight: "n", bishop: "b", queen: "q", king: "k" };
@@ -36,6 +36,27 @@ function placement(codes: number[], rotated: boolean): string {
     new Map(codes.map((code, i) => [squareName(rotated ? 63 - i : i), piece(code)])),
   );
 }
+function kingsResult(codes: number[], rotated: boolean): Result | undefined {
+  const kings = codes.flatMap((code, index) =>
+    code === 5 || code === 11 ? [{ code, square: squareName(rotated ? 63 - index : index) }] : [],
+  );
+  if (kings.length !== 2 || kings[0].code === kings[1].code) return undefined;
+  const squares = kings
+    .map((king) => king.square)
+    .sort()
+    .join("-");
+  switch (squares) {
+    case "d5-e4":
+      return "1-0";
+    case "d4-e5":
+      return "0-1";
+    case "e4-e5":
+    case "d4-d5":
+      return "1/2-1/2";
+    default:
+      return undefined;
+  }
+}
 function inferMove(chess: Chess, target: string): { chess: Chess; lastMove: string } | undefined {
   for (const move of chess.moves({ verbose: true })) {
     const candidate = new Chess(chess.fen());
@@ -54,7 +75,6 @@ interface Session {
   rotated: boolean;
   chess?: Chess;
   clock?: ClockReading;
-  whiteClockSide?: ClockSide;
   settleTimer?: NodeJS.Timeout;
   pollTimer?: NodeJS.Timeout;
   polling: boolean;
@@ -70,9 +90,22 @@ interface Session {
   lastIdentityAt?: number;
   refreshPromise?: Promise<void>;
   lastError?: string;
+  result?: Result;
+  resultStatus?: GameState["resultStatus"];
 }
 
 export class DgtTransport extends EventEmitter {
+  private readonly results = new Map<
+    string,
+    { result?: Result; resultStatus?: GameState["resultStatus"] }
+  >();
+  restoreResult(
+    physicalId: string,
+    result?: Result,
+    resultStatus?: GameState["resultStatus"],
+  ): void {
+    this.results.set(physicalId, { result, resultStatus });
+  }
   private readonly sessions = new Map<number, Session>();
   private readonly connections = new Map<
     number,
@@ -122,7 +155,6 @@ export class DgtTransport extends EventEmitter {
       client,
       connected: false,
       rotated: false,
-      whiteClockSide: "left",
       polling: false,
       failures: 0,
       startedAt: new Date().toISOString(),
@@ -154,14 +186,14 @@ export class DgtTransport extends EventEmitter {
       whiteClock: null,
       blackClock: null,
       clock: undefined,
-      whiteClockSide: s.whiteClockSide,
-      result: undefined,
+      result: this.results.get(physicalId)?.result,
       specialPieces: [],
       boardBattery: undefined,
       lastMove: undefined,
       positionStatus: "unresolved",
     });
     try {
+      Object.assign(s, this.results.get(physicalId));
       await client.open();
       await client.send(Command.idle);
       // RFCOMM opens before its radio link is ready; the first response can take several seconds.
@@ -239,12 +271,10 @@ export class DgtTransport extends EventEmitter {
   }
   private publishClock(s: Session): void {
     const c = s.clock;
-    const white = s.whiteClockSide;
     this.emitState(s, {
       clock: c,
-      whiteClockSide: white,
-      whiteClock: c?.connected && white ? c[white].seconds : null,
-      blackClock: c?.connected && white ? c[white === "left" ? "right" : "left"].seconds : null,
+      whiteClock: c?.connected ? c.left.seconds : null,
+      blackClock: c?.connected ? c.right.seconds : null,
     });
   }
   private publishPosition(s: Session): void {
@@ -280,14 +310,27 @@ export class DgtTransport extends EventEmitter {
       RESULTS[code] ? [{ square: squareName(s.rotated ? 63 - i : i), result: RESULTS[code] }] : [],
     );
     const results = new Set(specialPieces.map((p) => p.result));
+    const declaredByKings = kingsResult(s.codes, s.rotated);
+    if (declaredByKings) results.add(declaredByKings);
+    if (results.size > 1) {
+      s.resultStatus = "conflicting";
+    } else if (results.size === 1 && s.resultStatus !== "conflicting") {
+      const declared = [...results][0];
+      if (s.result && s.result !== declared) s.resultStatus = "conflicting";
+      else {
+        s.result = declared;
+        s.resultStatus = "reported";
+      }
+      this.results.set(s.physicalId, { result: s.result, resultStatus: s.resultStatus });
+    }
     this.emitState(s, {
       fen: positionStatus === "unresolved" ? `${target} w - - 0 1` : s.chess!.fen(),
       positionStatus,
       orientation: s.rotated ? "rotated" : "normal",
       ...(lastMove || positionStatus !== "tracked" ? { lastMove } : {}),
       specialPieces,
-      result: results.size === 1 ? specialPieces[0].result : undefined,
-      resultStatus: results.size > 1 ? "conflicting" : results.size === 1 ? "reported" : "none",
+      result: s.resultStatus === "conflicting" ? undefined : s.result,
+      resultStatus: s.resultStatus ?? "none",
     });
   }
   private async optionalRead(s: Session, read: () => Promise<unknown>): Promise<boolean> {
@@ -345,6 +388,24 @@ export class DgtTransport extends EventEmitter {
   async readHistory(tableId: number) {
     return this.session(tableId).client.readHistory();
   }
+  newGame(tableId: number): void {
+    const s = this.session(tableId);
+    if (s.codes && (kingsResult(s.codes, s.rotated) || s.codes.some((code) => RESULTS[code])))
+      throw new Error(
+        "Retirez d'abord la disposition ou les pièces de résultat avant de démarrer une nouvelle partie.",
+      );
+    s.result = undefined;
+    s.resultStatus = "none";
+    this.results.delete(s.physicalId);
+    s.chess = undefined;
+    this.emitState(s, {
+      result: undefined,
+      resultStatus: "none",
+      lastMove: undefined,
+      positionStatus: "unresolved",
+    });
+    this.publishPosition(s);
+  }
   async refresh(tableId: number): Promise<void> {
     const s = this.session(tableId);
     s.refreshPromise ??= (async () => {
@@ -357,12 +418,6 @@ export class DgtTransport extends EventEmitter {
       this.emit("diagnostics", this.diagnostics());
     });
     await s.refreshPromise;
-  }
-  setClockSide(tableId: number, side: ClockSide): void {
-    if (side !== "left" && side !== "right") throw new Error("Côté de pendule invalide");
-    const s = this.session(tableId);
-    s.whiteClockSide = side;
-    this.publishClock(s);
   }
   diagnostics() {
     return [...this.sessions.values()].map((s) => ({
