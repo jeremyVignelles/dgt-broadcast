@@ -7,7 +7,10 @@ import { SimulatorTransport } from "./adapters/simulator.ts";
 import { JsonStore } from "./adapters/storage.ts";
 import type { Persisted } from "./adapters/storage.ts";
 import { discoverBluetoothBoards } from "./adapters/bluetooth.ts";
+import { connectBoards } from "./adapters/connect.ts";
+import { DgtTransport } from "./adapters/dgt.ts";
 import { parsePlayersCsv, toPgn } from "./adapters/export.ts";
+import type { GameState } from "./domain/types.ts";
 
 const port = Number(process.env.PORT ?? 8787),
   webRoot = resolve(process.cwd(), "services/web");
@@ -21,6 +24,7 @@ const mimeTypes: Record<string, string> = {
 };
 const core = new BroadcastCore(Number(process.env.TABLES ?? 4));
 const simulator = new SimulatorTransport(core.state.tables.length);
+const dgtTransport = new DgtTransport();
 const store = new JsonStore<Persisted>(join(process.env.DGT_DATA_DIR ?? "data", "config.json"), {
   tables: core.state.tables,
   meeting: undefined,
@@ -29,18 +33,29 @@ const persisted = await store.load();
 if (persisted.tables.length >= 1 && persisted.tables.length <= 32)
   core.state.tables = persisted.tables;
 core.state.meeting = persisted.meeting;
+const addresses: Record<string, string> = { ...persisted.addresses };
 const clients = new Set<import("ws").WebSocket>();
 function publish() {
   const payload = JSON.stringify({ type: "projection", ...core.state });
   for (const ws of clients) if (ws.readyState === 1) ws.send(payload);
 }
-simulator.on("state", (game: any) => {
+simulator.on("state", (game: GameState) => {
+  const table = core.getTable(game.tableId);
+  if (table.physicalId && table.physicalId !== game.physicalId) return;
   core.updateGame(game.tableId, game);
   publish();
 });
+dgtTransport.on("state", ({ tableId, patch }: { tableId: number; patch: Partial<GameState> }) => {
+  if (core.getTable(tableId).physicalId !== patch.physicalId) return;
+  core.updateGame(tableId, patch);
+  publish();
+});
+dgtTransport.on("board-error", ({ tableId, error }: { tableId: number; error: Error }) =>
+  console.error(`DGT board on table ${tableId}:`, error.message),
+);
 if (simulatorEnabled) simulator.start();
 function persist() {
-  return store.save({ tables: core.state.tables, meeting: core.state.meeting });
+  return store.save({ tables: core.state.tables, meeting: core.state.meeting, addresses });
 }
 let scan: Promise<unknown> | undefined;
 function scanBoards() {
@@ -54,8 +69,11 @@ function scanBoards() {
     const errors: string[] = [];
     if (bluetoothEnabled) {
       try {
-        for (const b of await discoverBluetoothBoards())
+        for (const b of await discoverBluetoothBoards()) {
           boards.push({ id: b.name, name: b.name, address: b.address, source: "bluetooth" });
+          addresses[b.name] = b.address;
+        }
+        await persist();
       } catch (error) {
         errors.push(error instanceof Error ? error.message : String(error));
       }
@@ -87,6 +105,38 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === "/api/tables" && req.method === "GET") return json(res, core.state.tables);
     if (url.pathname === "/api/discovery/scan" && req.method === "POST")
       return json(res, await scanBoards());
+    if (url.pathname === "/api/bluetooth/connect" && req.method === "POST") {
+      if (!bluetoothEnabled)
+        return json(res, { error: "Bluetooth désactivé (DGT_BLUETOOTH=off)" }, 400);
+      const simulated = new Set(simulator.snapshot().map((g) => g.physicalId));
+      const boards = core.state.tables
+        .filter((t) => t.physicalId && !simulated.has(t.physicalId))
+        .map((t) => ({ tableId: t.id, name: t.physicalId!, address: addresses[t.physicalId!] }));
+      const unknown = boards.filter((b) => !b.address).map((b) => b.name);
+      if (unknown.length > 0)
+        return json(
+          res,
+          { error: `Adresse inconnue, relancez un scan : ${unknown.join(", ")}` },
+          400,
+        );
+      const result = await connectBoards(boards.map((b) => ({ ...b, address: b.address! })));
+      for (const board of result.boards) {
+        if (!board.paired || !board.device) {
+          core.updateGame(board.tableId, { status: "disconnected", battery: undefined });
+          continue;
+        }
+        try {
+          await dgtTransport.connect(board.tableId, board.name, board.device);
+        } catch (error) {
+          core.updateGame(board.tableId, { status: "disconnected", battery: undefined });
+          result.errors.push(
+            `${board.name} : ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
+      publish();
+      return json(res, result);
+    }
     if (url.pathname === "/api/tables/associate" && req.method === "POST") {
       const b = await body(req);
       const table = core.manualAssociate(b.tableId, b.physicalId);
@@ -116,7 +166,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === "/api/meeting" && req.method === "POST") {
       const meeting = core.startMeeting((await body(req)).name);
-      await store.save({ tables: core.state.tables, meeting });
+      await persist();
       return json(res, meeting);
     }
     if (url.pathname === "/api/players/import" && req.method === "POST") {

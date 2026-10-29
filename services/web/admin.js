@@ -142,6 +142,29 @@ $("#scan").onclick = async () => {
   }
 };
 
+$("#connect").onclick = async () => {
+  const button = $("#connect");
+  button.disabled = true;
+  $("#scan-errors").innerHTML = "";
+  $("#connect-status").textContent =
+    "Appairage puis liaison… validez la demande de mot de passe si elle apparaît.";
+  try {
+    const result = await api("/api/bluetooth/connect", {});
+    $("#connect-status").textContent =
+      result.boards.length === 0
+        ? "Aucun échiquier Bluetooth associé."
+        : result.boards
+            .map((b) => `Table ${b.tableId} → ${b.device}${b.paired ? "" : " (non appairé)"}`)
+            .join(", ");
+    $("#scan-errors").innerHTML = result.errors.map((e) => `<li>${escapeHtml(e)}</li>`).join("");
+  } catch (error) {
+    $("#connect-status").textContent = "";
+    report(error);
+  } finally {
+    button.disabled = false;
+  }
+};
+
 document.addEventListener("click", async (event) => {
   const { dataset } = event.target;
   try {

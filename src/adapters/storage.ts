@@ -22,4 +22,7 @@ export class JsonStore<T> {
     await rename(tmp, this.file);
   }
 }
-export type Persisted = Pick<AppState, "tables" | "meeting">;
+export type Persisted = Pick<AppState, "tables" | "meeting"> & {
+  /** Bluetooth address of each DGT board name, remembered from scans to bind after a restart. */
+  addresses?: Record<string, string>;
+};

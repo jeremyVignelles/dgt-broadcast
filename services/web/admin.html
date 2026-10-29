@@ -38,6 +38,15 @@
 
       <section>
         <h2>Tables</h2>
+        <p class="hint">
+          « Connecter les échiquiers » crée les liaisons <code>/dev/rfcommN</code> des échiquiers
+          associés. Un seul mot de passe administrateur est demandé (fenêtre système) ; les liaisons
+          restent en place jusqu'au redémarrage de la machine.
+        </p>
+        <div class="row">
+          <button id="connect">Connecter les échiquiers</button>
+          <span id="connect-status" role="status"></span>
+        </div>
         <table id="tables">
           <thead>
             <tr>
