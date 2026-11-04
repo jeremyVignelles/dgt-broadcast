@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { DgtTransport } from "../src/adapters/dgt.ts";
+import { isValidSerialPath, SERIAL_PATH_EXAMPLE } from "../src/dgt/ports.ts";
 import { RecordingStore } from "../src/dgt/recording.ts";
 
 const args = process.argv.slice(2);
@@ -18,12 +19,10 @@ if (
   !paths.length ||
   paths.length > 32 ||
   new Set(paths).size !== paths.length ||
-  paths.some(
-    (path) => !/^\/dev\/(?:rfcomm\d+|ttyUSB\d+|ttyACM\d+|serial\/by-id\/[^/]+)$/.test(path),
-  )
+  paths.some((path) => !isValidSerialPath(path))
 )
   throw new Error(
-    "Usage : npm run dgt:probe -- [--seconds 60] [--history] /dev/rfcomm0 [/dev/rfcomm1 …]",
+    `Usage : npm run dgt:probe -- [--seconds 60] [--history] ${SERIAL_PATH_EXAMPLE} […]`,
   );
 
 const recorder = new RecordingStore(join(process.env.DGT_DATA_DIR ?? "data", "recordings"));

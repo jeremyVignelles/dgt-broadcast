@@ -15,6 +15,7 @@ import { parsePlayersCsv, toPgn } from "./adapters/export.ts";
 import type { GameState } from "./domain/types.ts";
 import { CAPTURE_STEPS, RecordingStore } from "./dgt/recording.ts";
 import { SerialPort } from "serialport";
+import { isValidSerialPath } from "./dgt/ports.ts";
 import { SerialTransport } from "./dgt/serial.ts";
 import { ProtocolSimulator } from "./dgt/simulator.ts";
 import { squareIndex } from "./dgt/protocol.ts";
@@ -22,7 +23,8 @@ import { squareIndex } from "./dgt/protocol.ts";
 const port = Number(process.env.PORT ?? 8787),
   webRoot = resolve(process.cwd(), "services/web");
 const simulatorEnabled = process.env.DGT_SIMULATOR !== "off";
-const bluetoothEnabled = process.env.DGT_BLUETOOTH !== "off";
+// Pairing and rfcomm binding rely on BlueZ, so they are Linux-only; on Windows, COM ports are used.
+const bluetoothEnabled = process.env.DGT_BLUETOOTH !== "off" && process.platform === "linux";
 const pages: Record<string, string> = { "/": "display.html", "/admin": "admin.html" };
 const mimeTypes: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -204,10 +206,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, await SerialPort.list());
     if (url.pathname === "/api/dgt/serial/connect" && req.method === "POST") {
       const b = await body(req);
-      if (
-        typeof b.path !== "string" ||
-        !/^\/dev\/(?:ttyUSB\d+|ttyACM\d+|rfcomm\d+|serial\/by-id\/[^/]+)$/.test(b.path)
-      )
+      if (typeof b.path !== "string" || !isValidSerialPath(b.path))
         throw new Error("Chemin de port série invalide");
       const table = core.getTable(b.tableId);
       const physicalId =
