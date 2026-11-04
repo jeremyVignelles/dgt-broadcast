@@ -111,6 +111,12 @@ export class DgtTransport extends EventEmitter {
     number,
     { physicalId: string; path: string; promise: Promise<void> }
   >();
+  private readonly wanted = new Map<
+    number,
+    { physicalId: string; path: string; attempt: number; timer?: NodeJS.Timeout }
+  >();
+  private readonly reconnectInitialMs: number;
+  private readonly reconnectMaxMs: number;
   private readonly createTransport: (path: string) => ByteTransport;
   private readonly settleMs: number;
   private readonly pollMs: number;
@@ -120,12 +126,16 @@ export class DgtTransport extends EventEmitter {
       createTransport?: (path: string) => ByteTransport;
       settleMs?: number;
       pollMs?: number;
+      reconnectInitialMs?: number;
+      reconnectMaxMs?: number;
     } = {},
   ) {
     super();
     this.createTransport = options.createTransport ?? ((path) => new SerialTransport(path));
     this.settleMs = options.settleMs ?? 350;
     this.pollMs = options.pollMs ?? 10_000;
+    this.reconnectInitialMs = options.reconnectInitialMs ?? 1000;
+    this.reconnectMaxMs = options.reconnectMaxMs ?? 30_000;
   }
 
   connect(tableId: number, physicalId: string, path: string): Promise<void> {
@@ -135,9 +145,10 @@ export class DgtTransport extends EventEmitter {
         return Promise.reject(new Error("Une connexion est déjà en cours sur cette table"));
       return pending.promise;
     }
-    const promise = this.connectSession(tableId, physicalId, path).finally(() =>
-      this.connections.delete(tableId),
-    );
+    // Deferred so the connection is registered before connectSession emits any close event.
+    const promise = Promise.resolve()
+      .then(() => this.connectSession(tableId, physicalId, path))
+      .finally(() => this.connections.delete(tableId));
     this.connections.set(tableId, { physicalId, path, promise });
     return promise;
   }
@@ -178,8 +189,12 @@ export class DgtTransport extends EventEmitter {
     client.on("fault", (error: Error) => {
       this.report(s, error);
       this.markDisconnected(s);
+      this.scheduleReconnect(tableId);
     });
-    client.on("closed", () => this.markDisconnected(s));
+    client.on("closed", () => {
+      this.markDisconnected(s);
+      this.scheduleReconnect(tableId);
+    });
     this.emitState(s, {
       status: "reconnecting",
       battery: undefined,
@@ -204,6 +219,12 @@ export class DgtTransport extends EventEmitter {
       await this.readIdentity(s);
       await this.readClockIfQuiet(s);
       await this.readBattery(s);
+      const wanted = this.wanted.get(tableId);
+      if (wanted && wanted.path === path && wanted.physicalId === physicalId) wanted.attempt = 0;
+      else {
+        if (wanted?.timer) clearTimeout(wanted.timer);
+        this.wanted.set(tableId, { physicalId, path, attempt: 0 });
+      }
       s.pollTimer = setInterval(
         () =>
           void this.poll(s).catch((error: unknown) =>
@@ -217,6 +238,26 @@ export class DgtTransport extends EventEmitter {
       await client.close();
       throw error;
     }
+  }
+  private scheduleReconnect(tableId: number): void {
+    const w = this.wanted.get(tableId);
+    if (!w || w.timer || this.connections.has(tableId)) return;
+    const base = Math.min(this.reconnectMaxMs, this.reconnectInitialMs * 2 ** w.attempt);
+    const delayMs = Math.round(base * (0.5 + Math.random() / 2));
+    w.attempt++;
+    this.emit("reconnect-scheduled", {
+      tableId,
+      physicalId: w.physicalId,
+      path: w.path,
+      attempt: w.attempt,
+      delayMs,
+    });
+    w.timer = setTimeout(() => {
+      w.timer = undefined;
+      if (this.wanted.get(tableId) !== w) return;
+      this.connect(tableId, w.physicalId, w.path).catch(() => this.scheduleReconnect(tableId));
+    }, delayMs);
+    w.timer.unref();
   }
   private emitState(s: Session, patch: Partial<GameState>): void {
     this.emit("state", { tableId: s.tableId, patch: { ...patch, physicalId: s.physicalId } });
@@ -440,6 +481,9 @@ export class DgtTransport extends EventEmitter {
     }));
   }
   async disconnect(tableId: number): Promise<void> {
+    const w = this.wanted.get(tableId);
+    if (w?.timer) clearTimeout(w.timer);
+    this.wanted.delete(tableId);
     const pending = this.connections.get(tableId);
     if (pending)
       await pending.promise.catch((error: unknown) => {

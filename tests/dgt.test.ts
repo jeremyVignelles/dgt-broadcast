@@ -8,12 +8,13 @@ afterEach(async () => {
   await Promise.all(transports.map((t) => t.close()));
   transports.length = 0;
 });
-function setup(options: { pollMs?: number } = {}) {
+function setup(options: { pollMs?: number; reconnectInitialMs?: number } = {}) {
   const simulator = new ProtocolSimulator();
   const transport = new DgtTransport({
     createTransport: () => simulator,
     settleMs: 2,
     pollMs: options.pollMs ?? 60_000,
+    reconnectInitialMs: options.reconnectInitialMs,
   });
   transports.push(transport);
   const states: Record<string, unknown>[] = [];
@@ -282,5 +283,19 @@ describe("DGT hardware adapter", () => {
     expect(errors[0].message).toContain("USB disconnected");
     await transport.connect(1, "DGT_BT_TEST", "test");
     expect(latest().status).toBe("connected");
+  });
+
+  it("reconnects automatically with backoff after a link loss, but not after a manual disconnect", async () => {
+    const { simulator, transport } = setup({ reconnectInitialMs: 5 });
+    const scheduled: number[] = [];
+    transport.on("reconnect-scheduled", ({ attempt }) => scheduled.push(attempt));
+    await transport.connect(1, "DGT_BT_TEST", "test");
+    simulator.fail(new Error("link lost"));
+    await vi.waitFor(() => expect(transport.diagnostics()[0]?.connected).toBe(true));
+    expect(scheduled).toEqual([1]);
+    await transport.disconnect(1);
+    simulator.fail(new Error("link lost"));
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(scheduled).toEqual([1]);
   });
 });

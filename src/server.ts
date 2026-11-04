@@ -43,6 +43,9 @@ dgtTransport.on("diagnostics", (data) => recorder.append({ type: "diagnostics", 
 dgtTransport.on("connection", (data) =>
   recorder.append({ type: "connection", tableId: data.tableId, data }),
 );
+dgtTransport.on("reconnect-scheduled", (data) =>
+  recorder.append({ type: "diagnostics", tableId: data.tableId, data: { reconnect: data } }),
+);
 dgtTransport.on("retry", (data) =>
   recorder.append({ type: "diagnostics", tableId: data.tableId, data: { retry: data } }),
 );
