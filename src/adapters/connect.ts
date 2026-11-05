@@ -16,6 +16,7 @@ export interface ConnectDeps {
   scan: () => Promise<unknown>;
   pair: (address: string) => Promise<void>;
   bind: (addresses: string[]) => Promise<{ bindings: RfcommBinding[]; created: RfcommBinding[] }>;
+  devicePath?: (device: number) => string;
 }
 
 const defaultDeps: ConnectDeps = {
@@ -55,7 +56,7 @@ export async function connectBoards(boards: BoardToConnect[], deps: ConnectDeps 
     const binding = bindings.find((b) => b.address === board.address.toUpperCase());
     return {
       ...board,
-      device: binding ? devicePath(binding.device) : "",
+      device: binding ? (deps.devicePath ?? devicePath)(binding.device) : "",
       paired: paired.get(board.address) ?? false,
     };
   });

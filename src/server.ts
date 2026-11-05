@@ -9,6 +9,7 @@ import { SimulatorTransport } from "./adapters/simulator.ts";
 import { JsonStore } from "./adapters/storage.ts";
 import type { Persisted } from "./adapters/storage.ts";
 import { discoverBluetoothBoards } from "./adapters/bluetooth.ts";
+import { listWindowsBoards, windowsConnectDeps } from "./adapters/windows-bluetooth.ts";
 import { connectBoards } from "./adapters/connect.ts";
 import { DgtTransport } from "./adapters/dgt.ts";
 import { parsePlayersCsv, toPgn } from "./adapters/export.ts";
@@ -24,7 +25,10 @@ const port = Number(process.env.PORT ?? 8787),
   webRoot = resolve(process.cwd(), "services/web");
 const simulatorEnabled = process.env.DGT_SIMULATOR !== "off";
 // Pairing and rfcomm binding rely on BlueZ, so they are Linux-only; on Windows, COM ports are used.
-const bluetoothEnabled = process.env.DGT_BLUETOOTH !== "off" && process.platform === "linux";
+const isWindows = process.platform === "win32";
+// Linux pairs and binds through BlueZ; Windows boards are paired in the OS and exposed as COM ports.
+const bluetoothEnabled =
+  process.env.DGT_BLUETOOTH !== "off" && (process.platform === "linux" || isWindows);
 const pages: Record<string, string> = { "/": "display.html", "/admin": "admin.html" };
 const mimeTypes: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -129,7 +133,7 @@ function scanBoards() {
     const errors: string[] = [];
     if (bluetoothEnabled) {
       try {
-        for (const b of await discoverBluetoothBoards()) {
+        for (const b of await (isWindows ? listWindowsBoards() : discoverBluetoothBoards())) {
           boards.push({ id: b.name, name: b.name, address: b.address, source: "bluetooth" });
           addresses[b.name] = b.address;
         }
@@ -146,6 +150,51 @@ function scanBoards() {
     return { boards, errors };
   })().finally(() => (scan = undefined));
   return scan;
+}
+async function connectBluetoothBoards(): Promise<{ status: number; body: any }> {
+  if (!bluetoothEnabled)
+    return { status: 400, body: { error: "Bluetooth désactivé (DGT_BLUETOOTH=off)" } };
+  const simulated = new Set(simulator.snapshot().map((g) => g.physicalId));
+  const boards = core.state.tables
+    .filter(
+      (t) =>
+        t.physicalId?.startsWith("DGT_BT_") &&
+        !t.physicalId.startsWith("DGT_BT_SIM_") &&
+        !simulated.has(t.physicalId),
+    )
+    .map((t) => ({ tableId: t.id, name: t.physicalId!, address: addresses[t.physicalId!] }));
+  const unknown = boards.filter((b) => !b.address).map((b) => b.name);
+  if (unknown.length > 0)
+    return {
+      status: 400,
+      body: { error: `Adresse inconnue, relancez un scan : ${unknown.join(", ")}` },
+    };
+  const result = await connectBoards(
+    boards.map((b) => ({ ...b, address: b.address! })),
+    isWindows ? windowsConnectDeps() : undefined,
+  );
+  await Promise.all(
+    result.boards.map(async (board) => {
+      if (!board.paired || !board.device) {
+        if (board.paired && isWindows)
+          result.errors.push(
+            `${board.name} : aucun port COM sortant (Paramètres Bluetooth > Ports COM)`,
+          );
+        core.updateGame(board.tableId, { status: "disconnected", battery: undefined });
+        return;
+      }
+      try {
+        await dgtTransport.connect(board.tableId, board.name, board.device);
+      } catch (error) {
+        core.updateGame(board.tableId, { status: "disconnected", battery: undefined });
+        result.errors.push(
+          `${board.name} : ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }),
+  );
+  publish();
+  return { status: 200, body: result };
 }
 function json(res: http.ServerResponse, value: unknown, status = 200) {
   res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
@@ -280,43 +329,8 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === "/api/discovery/scan" && req.method === "POST")
       return json(res, await scanBoards());
     if (url.pathname === "/api/bluetooth/connect" && req.method === "POST") {
-      if (!bluetoothEnabled)
-        return json(res, { error: "Bluetooth désactivé (DGT_BLUETOOTH=off)" }, 400);
-      const simulated = new Set(simulator.snapshot().map((g) => g.physicalId));
-      const boards = core.state.tables
-        .filter(
-          (t) =>
-            t.physicalId?.startsWith("DGT_BT_") &&
-            !t.physicalId.startsWith("DGT_BT_SIM_") &&
-            !simulated.has(t.physicalId),
-        )
-        .map((t) => ({ tableId: t.id, name: t.physicalId!, address: addresses[t.physicalId!] }));
-      const unknown = boards.filter((b) => !b.address).map((b) => b.name);
-      if (unknown.length > 0)
-        return json(
-          res,
-          { error: `Adresse inconnue, relancez un scan : ${unknown.join(", ")}` },
-          400,
-        );
-      const result = await connectBoards(boards.map((b) => ({ ...b, address: b.address! })));
-      await Promise.all(
-        result.boards.map(async (board) => {
-          if (!board.paired || !board.device) {
-            core.updateGame(board.tableId, { status: "disconnected", battery: undefined });
-            return;
-          }
-          try {
-            await dgtTransport.connect(board.tableId, board.name, board.device);
-          } catch (error) {
-            core.updateGame(board.tableId, { status: "disconnected", battery: undefined });
-            result.errors.push(
-              `${board.name} : ${error instanceof Error ? error.message : String(error)}`,
-            );
-          }
-        }),
-      );
-      publish();
-      return json(res, result);
+      const outcome = await connectBluetoothBoards();
+      return json(res, outcome.body, outcome.status);
     }
     if (url.pathname === "/api/tables/associate" && req.method === "POST") {
       const b = await body(req);
@@ -402,6 +416,14 @@ server.listen(port, "127.0.0.1", () => {
   const address = server.address();
   if (address && typeof address !== "string")
     console.log(`DGT Broadcast listening on http://127.0.0.1:${address.port}`);
+  // Restored tables are only "associated"; reconnect their boards without operator action.
+  if (bluetoothEnabled)
+    void connectBluetoothBoards()
+      .then(({ body }) => {
+        if (body.error) console.error("Startup reconnection skipped:", body.error);
+        else for (const e of body.errors ?? []) console.error("Startup reconnection:", e);
+      })
+      .catch((error: unknown) => console.error("Startup reconnection failed:", error));
 });
 async function shutdown() {
   server.close();
