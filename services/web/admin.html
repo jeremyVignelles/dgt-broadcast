@@ -9,7 +9,10 @@
   <body>
     <header>
       <h1>DGT Broadcast <small>Configuration</small></h1>
-      <a class="button" href="/" target="_blank" rel="noopener">Ouvrir l'affichage ↗</a>
+      <nav class="row">
+        <a class="button" href="/simulator">Simulateur ↗</a>
+        <a class="button" href="/" target="_blank" rel="noopener">Ouvrir l'affichage ↗</a>
+      </nav>
     </header>
     <main>
       <section>
@@ -93,66 +96,6 @@
       </section>
 
       <section>
-        <h2>Simulateur du protocole</h2>
-        <p class="hint">
-          Ce simulateur traverse le véritable pilote et peut être enregistré. Les secondes sont des
-          valeurs fixes, pas un décompte automatique.
-        </p>
-        <div class="row">
-          <label
-            >Table <input id="protocol-table" type="number" min="1" max="32" value="1"
-          /></label>
-          <button id="protocol-connect">Connecter un plateau simulé</button>
-          <button id="protocol-fault" class="secondary">Simuler une panne</button>
-        </div>
-        <div class="row">
-          <input id="protocol-square" value="e4" aria-label="Case simulée" maxlength="2" />
-          <select id="protocol-piece" aria-label="Pièce simulée">
-            <option value="0">Vide</option>
-            <option value="1">Pion blanc</option>
-            <option value="2">Tour blanche</option>
-            <option value="3">Cavalier blanc</option>
-            <option value="4">Fou blanc</option>
-            <option value="5">Roi blanc</option>
-            <option value="6">Dame blanche</option>
-            <option value="7">Pion noir</option>
-            <option value="8">Tour noire</option>
-            <option value="9">Cavalier noir</option>
-            <option value="10">Fou noir</option>
-            <option value="11">Roi noir</option>
-            <option value="12">Dame noire</option>
-            <option value="13">Résultat : nulle</option>
-            <option value="14">Résultat : victoire blanche</option>
-            <option value="15">Résultat : victoire noire</option>
-          </select>
-          <button id="protocol-change" class="secondary">Changer cette case</button>
-        </div>
-        <div class="row">
-          <label
-            >Gauche (s) <input id="protocol-left" type="number" min="0" max="35999" value="600"
-          /></label>
-          <label
-            >Droite (s) <input id="protocol-right" type="number" min="0" max="35999" value="600"
-          /></label>
-          <label><input id="protocol-running" type="checkbox" /> En marche</label>
-          <label
-            ><input id="protocol-clock-connected" type="checkbox" checked /> Pendule présente</label
-          >
-          <select id="protocol-active" aria-label="Côté actif">
-            <option value="left">Gauche actif</option>
-            <option value="right">Droite actif</option>
-          </select>
-          <button id="protocol-clock" class="secondary">Envoyer la pendule</button>
-        </div>
-        <div class="row">
-          <label
-            >Batterie (%) <input id="protocol-battery" type="number" min="0" max="100" value="85"
-          /></label>
-          <button id="protocol-battery-send" class="secondary">Envoyer la batterie</button>
-        </div>
-      </section>
-
-      <section>
         <h2>Enregistrement guidé</h2>
         <p class="hint">
           Les trames reçues et commandes envoyées de tous les plateaux connectés sont enregistrées
@@ -208,23 +151,6 @@
         </table>
       </section>
 
-      <section>
-        <details>
-          <summary><h2>Simulateur</h2></summary>
-          <p class="hint">Pilote les échiquiers simulés pour tester l'affichage sans matériel.</p>
-          <table id="simulator">
-            <thead>
-              <tr>
-                <th>Table</th>
-                <th>Connexion</th>
-                <th>Batterie (%)</th>
-                <th>Partie</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </details>
-      </section>
     </main>
     <script type="module" src="/admin.js"></script>
   </body>

@@ -11,5 +11,18 @@
     "allowJs": true,
     "types": ["node"]
   },
-  "include": ["src", "tests", "scripts/*.ts"]
+  "contentMappers": [
+    {
+      "package": "@vue/content-mapper",
+      "extensions": [".vue"],
+      "options": { "target": 3.5 }
+    }
+  ],
+  "include": [
+    "src",
+    "tests",
+    "scripts/*.ts",
+    "services/web/simulator/src/**/*.ts",
+    "services/web/simulator/src/**/*.vue"
+  ]
 }

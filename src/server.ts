@@ -5,7 +5,6 @@ import { pipeline } from "node:stream/promises";
 import { extname, join, resolve, sep } from "node:path";
 import { WebSocketServer } from "ws";
 import { BroadcastCore } from "./domain/core.ts";
-import { SimulatorTransport } from "./adapters/simulator.ts";
 import { JsonStore } from "./adapters/storage.ts";
 import type { Persisted } from "./adapters/storage.ts";
 import { discoverBluetoothBoards } from "./adapters/bluetooth.ts";
@@ -23,20 +22,24 @@ import { squareIndex } from "./dgt/protocol.ts";
 
 const port = Number(process.env.PORT ?? 8787),
   webRoot = resolve(process.cwd(), "services/web");
-const simulatorEnabled = process.env.DGT_SIMULATOR !== "off";
 // Pairing and rfcomm binding rely on BlueZ, so they are Linux-only; on Windows, COM ports are used.
 const isWindows = process.platform === "win32";
 // Linux pairs and binds through BlueZ; Windows boards are paired in the OS and exposed as COM ports.
 const bluetoothEnabled =
   process.env.DGT_BLUETOOTH !== "off" && (process.platform === "linux" || isWindows);
-const pages: Record<string, string> = { "/": "display.html", "/admin": "admin.html" };
+const pages: Record<string, string> = {
+  "/": "display.html",
+  "/admin": "admin.html",
+  "/simulator": "dist/simulator/index.html",
+  "/simulator/": "dist/simulator/index.html",
+};
 const mimeTypes: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8",
+  ".svg": "image/svg+xml",
 };
 const core = new BroadcastCore(Number(process.env.TABLES ?? 4));
-const simulator = new SimulatorTransport(core.state.tables.length);
 const protocolSimulators = new Map<string, ProtocolSimulator>();
 const dgtTransport = new DgtTransport({
   createTransport: (path) => protocolSimulators.get(path) ?? new SerialTransport(path),
@@ -67,6 +70,8 @@ if (persisted.tables.length >= 1 && persisted.tables.length <= 32)
   core.state.tables = persisted.tables;
 core.state.meeting = persisted.meeting;
 for (const table of core.state.tables)
+  if (table.physicalId?.startsWith("DGT_BT_SIM_")) core.dissociate(table.id);
+for (const table of core.state.tables)
   if (table.physicalId)
     dgtTransport.restoreResult(table.physicalId, table.game.result, table.game.resultStatus);
 for (const table of core.state.tables) {
@@ -82,28 +87,23 @@ for (const table of core.state.tables) {
 }
 const addresses: Record<string, string> = { ...persisted.addresses };
 const clients = new Set<import("ws").WebSocket>();
+const simulatorClients = new Map<number, import("ws").WebSocket>();
+const simulatorClientAlive = new Map<import("ws").WebSocket, boolean>();
 function publish() {
   const payload = JSON.stringify({ type: "projection", ...core.state });
   for (const ws of clients) if (ws.readyState === 1) ws.send(payload);
 }
-simulator.on("state", (game: GameState) => {
-  const table = core.getTable(game.tableId);
-  if (table.physicalId && table.physicalId !== game.physicalId) return;
-  core.updateGame(game.tableId, game);
-  publish();
-});
 dgtTransport.on("state", ({ tableId, patch }: { tableId: number; patch: Partial<GameState> }) => {
   if (core.getTable(tableId).physicalId !== patch.physicalId) return;
   core.updateGame(tableId, patch);
   publish();
-  if (patch.resultStatus !== undefined)
+  if (patch.resultStatus !== undefined && !patch.physicalId?.startsWith("DGT_BT_SIM_"))
     void persist().catch((error: unknown) => console.error("Result persistence failed:", error));
 });
 dgtTransport.on("board-error", ({ tableId, error }: { tableId: number; error: Error }) => {
   console.error(`DGT board on table ${tableId}:`, error.message);
   recorder.append({ type: "fault", tableId, data: error.message });
 });
-if (simulatorEnabled) simulator.start();
 function persist() {
   return store.save({ tables: core.state.tables, meeting: core.state.meeting, addresses });
 }
@@ -128,7 +128,7 @@ function scanBoards() {
       id: string;
       name: string;
       address?: string;
-      source: "bluetooth" | "simulator";
+      source: "bluetooth";
     }[] = [];
     const errors: string[] = [];
     if (bluetoothEnabled) {
@@ -142,10 +142,6 @@ function scanBoards() {
         errors.push(error instanceof Error ? error.message : String(error));
       }
     }
-    if (simulatorEnabled) {
-      for (const g of simulator.snapshot())
-        boards.push({ id: g.physicalId!, name: g.physicalId!, source: "simulator" });
-    }
     core.discover(boards.map((b) => b.id));
     return { boards, errors };
   })().finally(() => (scan = undefined));
@@ -154,13 +150,11 @@ function scanBoards() {
 async function connectBluetoothBoards(): Promise<{ status: number; body: any }> {
   if (!bluetoothEnabled)
     return { status: 400, body: { error: "Bluetooth désactivé (DGT_BLUETOOTH=off)" } };
-  const simulated = new Set(simulator.snapshot().map((g) => g.physicalId));
   const boards = core.state.tables
     .filter(
       (t) =>
         t.physicalId?.startsWith("DGT_BT_") &&
-        !t.physicalId.startsWith("DGT_BT_SIM_") &&
-        !simulated.has(t.physicalId),
+        !t.physicalId.startsWith("DGT_BT_SIM_"),
     )
     .map((t) => ({ tableId: t.id, name: t.physicalId!, address: addresses[t.physicalId!] }));
   const unknown = boards.filter((b) => !b.address).map((b) => b.name);
@@ -215,42 +209,12 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === "/api/tables/count" && req.method === "POST") {
       const { count } = await body(req);
       core.ensureTableCount(count);
-      if (simulatorEnabled) simulator.ensureTables(count);
       await persist();
       publish();
       return json(res, core.state.tables);
     }
     if (url.pathname === "/api/dgt/diagnostics" && req.method === "GET")
       return json(res, { boards: dgtTransport.diagnostics(), recording: recorder.status() });
-    if (url.pathname === "/api/dgt/simulator/connect" && req.method === "POST") {
-      const { tableId } = await body(req);
-      core.getTable(tableId);
-      const path = `sim:${tableId}`;
-      const physicalId = `DGT_BT_SIM_PROTOCOL_${tableId}`;
-      if (!protocolSimulators.has(path)) protocolSimulators.set(path, new ProtocolSimulator());
-      await associate(tableId, physicalId);
-      await dgtTransport.connect(tableId, physicalId, path);
-      return json(res, core.getTable(tableId).game);
-    }
-    if (url.pathname === "/api/dgt/simulator/event" && req.method === "POST") {
-      const b = await body(req);
-      const path = `sim:${b.tableId}`;
-      const simulator = protocolSimulators.get(path);
-      if (
-        !simulator ||
-        !dgtTransport
-          .diagnostics()
-          .some((d) => d.tableId === b.tableId && d.path === path && d.connected)
-      )
-        throw new Error("Simulateur protocolaire non connecté");
-      if (b.kind === "square") simulator.changeSquare(squareIndex(b.square), b.code);
-      else if (b.kind === "clock")
-        simulator.setTimes(b.leftSeconds, b.rightSeconds, b.running, b.activeSide, b.connected);
-      else if (b.kind === "battery") simulator.setBattery(b.percent);
-      else if (b.kind === "fault") simulator.fail(new Error("Panne de liaison simulée"));
-      else throw new Error("Événement simulé inconnu");
-      return json(res, { ok: true });
-    }
     if (url.pathname === "/api/dgt/serial/ports" && req.method === "GET")
       return json(res, await SerialPort.list());
     if (url.pathname === "/api/dgt/serial/connect" && req.method === "POST") {
@@ -372,18 +336,12 @@ const server = http.createServer(async (req, res) => {
         : (res.writeHead(200, { "content-type": "application/x-chess-pgn" }),
           res.end(toPgn(core.getTable(Number(exportMatch[1])).game)));
     }
-    if (url.pathname === "/api/simulator/move" && req.method === "POST") {
-      const b = await body(req);
-      simulator.move(b.tableId, b.lastMove, b.fen);
-      return json(res, core.getTable(b.tableId).game);
-    }
-    if (url.pathname === "/api/simulator/status" && req.method === "POST") {
-      const b = await body(req);
-      simulator.setStatus(b.tableId, b.status, b.battery);
-      return json(res, core.getTable(b.tableId).game);
-    }
     if (req.method === "GET") {
-      const target = resolve(webRoot, pages[url.pathname] ?? url.pathname.slice(1));
+      const targetPath = pages[url.pathname] ??
+        (url.pathname.startsWith("/simulator/")
+        ? join("dist", "simulator", url.pathname.slice("/simulator/".length))
+          : url.pathname.slice(1));
+      const target = resolve(webRoot, targetPath);
       if (!target.startsWith(webRoot + sep)) return json(res, { error: "invalid path" }, 400);
       try {
         const file = await readFile(target);
@@ -401,17 +359,122 @@ const server = http.createServer(async (req, res) => {
     json(res, { error: error instanceof Error ? error.message : "request failed" }, 400);
   }
 });
-const wss = new WebSocketServer({ noServer: true });
+const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
 wss.on("connection", (ws) => {
   clients.add(ws);
   ws.send(JSON.stringify({ type: "projection", ...core.state }));
   ws.on("close", () => clients.delete(ws));
 });
 server.on("upgrade", (req, socket, head) => {
-  if (new URL(req.url ?? "/", "http://127.0.0.1").pathname !== "/api/stream")
+  const pathname = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
+  if (pathname === "/api/stream") {
+    wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
+    return;
+  }
+  const simulatorMatch = pathname.match(/^\/api\/dgt\/simulator\/(\d+)$/);
+  if (!simulatorMatch) return socket.destroy();
+  const tableId = Number(simulatorMatch[1]);
+  try {
+    core.getTable(tableId);
+  } catch {
     return socket.destroy();
-  wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
+  }
+  wss.handleUpgrade(req, socket, head, (ws) => {
+    const physicalId = `DGT_BT_SIM_PROTOCOL_${tableId}`;
+    const path = `sim:${tableId}`;
+    if (
+      simulatorClients.has(tableId) ||
+      (core.getTable(tableId).physicalId && core.getTable(tableId).physicalId !== physicalId)
+    ) {
+      ws.send(
+        JSON.stringify({
+          type: "error",
+          error: simulatorClients.has(tableId)
+            ? "Un simulateur est déjà ouvert pour cette table."
+            : "Cette table est déjà associée à un échiquier physique.",
+        }),
+      );
+      ws.close(1008);
+      return;
+    }
+
+    const simulator = new ProtocolSimulator();
+    simulatorClients.set(tableId, ws);
+    simulatorClientAlive.set(ws, true);
+    protocolSimulators.set(path, simulator);
+    core.enroll(tableId, physicalId);
+    publish();
+    ws.on("pong", () => simulatorClientAlive.set(ws, true));
+    ws.on("message", (data) => {
+      try {
+        const event = JSON.parse(data.toString());
+        if (event.kind === "position") simulator.setPosition(event.codes);
+        else if (event.kind === "square")
+          simulator.changeSquare(squareIndex(event.square), event.code);
+        else if (event.kind === "clock")
+          simulator.setTimes(
+            event.leftSeconds,
+            event.rightSeconds,
+            event.running,
+            event.activeSide,
+            event.connected,
+          );
+        else if (event.kind === "battery") simulator.setBattery(event.percent);
+        else throw new Error("Événement simulé inconnu");
+      } catch (error) {
+        ws.send(JSON.stringify({ type: "error", error: error instanceof Error ? error.message : String(error) }));
+      }
+    });
+
+    let cleanup: Promise<void> | undefined;
+    const disconnect = () => {
+      cleanup ??= (async () => {
+        if (simulatorClients.get(tableId) === ws) simulatorClients.delete(tableId);
+        simulatorClientAlive.delete(ws);
+        if (protocolSimulators.get(path) === simulator) protocolSimulators.delete(path);
+        await dgtTransport.disconnect(tableId);
+        const table = core.getTable(tableId);
+        if (table.physicalId === physicalId) {
+          core.dissociate(tableId);
+          publish();
+        }
+      })().catch((error: unknown) => console.error("Simulator disconnect failed:", error));
+      return cleanup;
+    };
+    ws.on("close", () => void disconnect());
+    ws.on("error", (error) => {
+      console.error(`Simulator WebSocket error on table ${tableId}:`, error);
+      void disconnect();
+    });
+    void dgtTransport
+      .connect(tableId, physicalId, path)
+      .then(() => {
+        if (ws.readyState === 1) ws.send(JSON.stringify({ type: "ready" }));
+      })
+      .catch((error: unknown) => {
+        if (ws.readyState === 1) {
+          ws.send(
+            JSON.stringify({
+              type: "error",
+              error: error instanceof Error ? error.message : String(error),
+            }),
+          );
+          ws.close(1011);
+        }
+      });
+  });
 });
+const simulatorHeartbeat = setInterval(() => {
+  for (const [tableId, ws] of simulatorClients) {
+    if (simulatorClientAlive.get(ws) === false) {
+      ws.terminate();
+      console.warn(`Simulator heartbeat expired on table ${tableId}`);
+    } else if (ws.readyState === 1) {
+      simulatorClientAlive.set(ws, false);
+      ws.ping();
+    }
+  }
+}, 15_000);
 server.listen(port, "127.0.0.1", () => {
   const address = server.address();
   if (address && typeof address !== "string")
@@ -426,8 +489,10 @@ server.listen(port, "127.0.0.1", () => {
       .catch((error: unknown) => console.error("Startup reconnection failed:", error));
 });
 async function shutdown() {
+  clearInterval(simulatorHeartbeat);
   server.close();
   for (const ws of clients) ws.close();
+  for (const ws of simulatorClients.values()) ws.close();
   wss.close();
   try {
     await dgtTransport.close();

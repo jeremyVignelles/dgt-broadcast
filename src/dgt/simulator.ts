@@ -99,6 +99,13 @@ export class ProtocolSimulator implements ByteTransport {
     this.codes[index] = code;
     if (this.updates) this.emitFrame(Message.square, [index, code]);
   }
+  setPosition(codes: number[]): void {
+    if (codes.length !== 64) throw new Error("Position simulée invalide");
+    codes.forEach((code) => piece(code));
+    for (let index = 0; index < codes.length; index++) {
+      if (this.codes[index] !== codes[index]) this.changeSquare(index, codes[index]);
+    }
+  }
   setClock(payload: number[]): void {
     this.clock = payload;
     if (this.updates) this.emitFrame(Message.clock, payload);

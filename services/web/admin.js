@@ -12,19 +12,6 @@ const STATUS_LABELS = {
   enrolling: ["Appairage", "warn"],
 };
 
-// Short scripted game used to exercise the display without a physical board.
-const DEMO_GAME = [
-  ["", "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"],
-  ["e2e4", "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1"],
-  ["e7e5", "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2"],
-  ["g1f3", "rnbqkbnr/pppp1ppp/8/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 1 2"],
-  ["b8c6", "r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3"],
-  ["f1c4", "r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3"],
-  ["f8c5", "r1bqk1nr/pppp1ppp/2n5/2b1p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4"],
-  ["c2c3", "r1bqk1nr/pppp1ppp/2n5/2b1p3/2B1P3/2P2N2/PP1P1PPP/RNBQK2R b KQkq - 0 4"],
-];
-const demoStep = new Map();
-
 let tables = [];
 let lastScan = [];
 
@@ -61,28 +48,6 @@ function renderTables() {
     .join("");
 }
 
-function renderSimulator() {
-  $("#simulator tbody").innerHTML = tables
-    .map((t) => {
-      const options = Object.entries(STATUS_LABELS)
-        .map(
-          ([value, [label]]) =>
-            `<option value="${value}" ${t.game.status === value ? "selected" : ""}>${label}</option>`,
-        )
-        .join("");
-      return `<tr>
-        <td>${escapeHtml(t.label)}</td>
-        <td><select data-sim-status="${t.id}">${options}</select></td>
-        <td><input type="number" min="0" max="100" value="${t.game.battery ?? ""}" data-sim-battery="${t.id}" /></td>
-        <td>
-          <button class="secondary" data-sim-next="${t.id}">Coup suivant</button>
-          <button class="secondary" data-sim-reset="${t.id}">Réinitialiser</button>
-        </td>
-      </tr>`;
-    })
-    .join("");
-}
-
 function renderDiscovered() {
   const body = $("#discovered tbody");
   if (lastScan.length === 0) {
@@ -101,7 +66,7 @@ function renderDiscovered() {
       return `<tr>
         <td>${escapeHtml(b.name)}</td>
         <td>${escapeHtml(b.address ?? "—")}</td>
-        <td>${b.source === "bluetooth" ? "Bluetooth" : "Simulateur"}</td>
+        <td>Bluetooth</td>
         <td>
           <select data-target="${escapeHtml(b.id)}">${tableOptions}</select>
           <button data-associate="${escapeHtml(b.id)}">Associer</button>
@@ -120,7 +85,6 @@ function renderDiscovered() {
 function setState(state) {
   tables = state.tables;
   renderTables();
-  renderSimulator();
 }
 
 $("#scan").onclick = async () => {
@@ -199,15 +163,6 @@ document.addEventListener("click", async (event) => {
       link.download = `dgt-history-table-${dataset.history}.json`;
       link.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
-    } else if (dataset.simNext || dataset.simReset) {
-      const id = Number(dataset.simNext ?? dataset.simReset);
-      const step = dataset.simReset ? 0 : ((demoStep.get(id) ?? 0) + 1) % DEMO_GAME.length;
-      demoStep.set(id, step);
-      await api("/api/simulator/move", {
-        tableId: id,
-        lastMove: DEMO_GAME[step][0],
-        fen: DEMO_GAME[step][1],
-      });
     }
   } catch (error) {
     report(error);
@@ -215,19 +170,10 @@ document.addEventListener("click", async (event) => {
 });
 
 document.addEventListener("change", async (event) => {
-  const { dataset, checked, value } = event.target;
+  const { dataset, checked } = event.target;
   try {
     if (dataset.visible) {
       await api("/api/tables/visibility", { tableId: Number(dataset.visible), visible: checked });
-    } else if (dataset.simStatus) {
-      await api("/api/simulator/status", { tableId: Number(dataset.simStatus), status: value });
-    } else if (dataset.simBattery) {
-      const t = tables.find((x) => x.id === Number(dataset.simBattery));
-      await api("/api/simulator/status", {
-        tableId: t.id,
-        status: t.game.status,
-        battery: Number(value),
-      });
     }
   } catch (error) {
     report(error);
@@ -264,45 +210,6 @@ $("#serial-connect").onclick = async () => {
 };
 
 let captureSteps = [];
-async function protocolEvent(event) {
-  try {
-    await api("/api/dgt/simulator/event", {
-      tableId: Number($("#protocol-table").value),
-      ...event,
-    });
-  } catch (error) {
-    report(error);
-  }
-}
-$("#protocol-connect").onclick = async () => {
-  const button = $("#protocol-connect");
-  button.disabled = true;
-  try {
-    await api("/api/dgt/simulator/connect", { tableId: Number($("#protocol-table").value) });
-  } catch (error) {
-    report(error);
-  } finally {
-    button.disabled = false;
-  }
-};
-$("#protocol-change").onclick = () =>
-  protocolEvent({
-    kind: "square",
-    square: $("#protocol-square").value,
-    code: Number($("#protocol-piece").value),
-  });
-$("#protocol-fault").onclick = () => protocolEvent({ kind: "fault" });
-$("#protocol-clock").onclick = () =>
-  protocolEvent({
-    kind: "clock",
-    leftSeconds: Number($("#protocol-left").value),
-    rightSeconds: Number($("#protocol-right").value),
-    running: $("#protocol-running").checked,
-    activeSide: $("#protocol-active").value,
-    connected: $("#protocol-clock-connected").checked,
-  });
-$("#protocol-battery-send").onclick = () =>
-  protocolEvent({ kind: "battery", percent: Number($("#protocol-battery").value) });
 let captureStep = 0;
 function renderCaptureStep() {
   $("#capture-instruction").textContent =

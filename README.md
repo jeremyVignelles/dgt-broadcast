@@ -1,6 +1,6 @@
 # DGT Broadcast
 
-MVP local hors-ligne pour projeter les états de 1 à 32 échiquiers DGT. Le domaine est indépendant du transport : le simulateur est actif par défaut, la découverte Bluetooth utilise `bluetoothctl` (BlueZ) et les liaisons série sont créées avec `rfcomm bind`.
+MVP local hors-ligne pour projeter les états de 1 à 32 échiquiers DGT. Le domaine est indépendant du transport ; la découverte Bluetooth utilise `bluetoothctl` (BlueZ) et les liaisons série sont créées avec `rfcomm bind`.
 
 ## Démarrage (Node.js 26)
 
@@ -9,12 +9,15 @@ npm install
 npm run dev
 ```
 
-Deux pages, servies par le même serveur (`http://127.0.0.1:8787`) :
+`npm run dev` construit le simulateur Vue/Vite puis démarre le serveur (`http://127.0.0.1:8787`). Trois pages sont servies :
 
 | Page     | URL      | Rôle                                                                                                                             |
 | -------- | -------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | Affichage | `/`      | Grille épurée sans bouton, à projeter en plein écran (double-clic ou `F`). Elle occupe tout l'écran : 4 échiquiers = 2×2.        |
-| Admin    | `/admin` | Scan Bluetooth, association échiquier ↔ table, affichage/masquage des tables, pilotage du simulateur.                           |
+| Admin    | `/admin` | Scan Bluetooth, association échiquier ↔ table, affichage/masquage des tables et diagnostics.                                     |
+| Simulateur | `/simulator` | Échiquier, pendule et batterie simulés via le vrai pilote protocolaire. Un seul simulateur par table ; sa fermeture déconnecte la table. |
+
+`npm run web:dev` lance Vite pour le développement UI ; démarrer aussi `npm run dev` dans un autre terminal pour le serveur/API.
 
 La page d'affichage montre pour chaque table : position, dernier coup surligné, joueurs, horloges, statut de connexion (échiquier grisé + message si déconnecté, contour orange si instable) et batterie (en rouge sous 20 %). Les détails (ELO, batterie normale) disparaissent quand les cellules deviennent petites.
 
@@ -84,13 +87,13 @@ npm run dgt:replay -- data/recordings/IDENTIFIANT.jsonl
 npm run dgt:probe -- --seconds 60 --history /dev/rfcomm0 /dev/rfcomm1
 ```
 
-Le rejeu utilise le vrai parseur et le vrai décodeur ; il ne simule pas encore l'écoulement du temps ni les requêtes applicatives. `ProtocolSimulator` répond, lui, aux commandes au niveau octet et permet des injections de trames fragmentées, de pannes et de changements physiques pour les tests. Le simulateur métier existant reste destiné à l'interface.
+Le rejeu utilise le vrai parseur et le vrai décodeur ; il ne simule pas encore l'écoulement du temps ni les requêtes applicatives. `ProtocolSimulator` répond aux commandes au niveau octet ; la page `/simulator` le pilote et fait transiter les changements de cases, pendule et batterie par le vrai pilote DGT. La connexion WebSocket dédiée est limitée à une page par table et utilise un heartbeat pour nettoyer les onglets fermés brutalement.
 
 Pour tester huit plateaux : les allumer, scanner, ajouter huit tables, associer et connecter les huit plateaux, puis laisser une capture ouverte. Le panneau de stabilité affiche les réponses aux contrôles de position, octets/messages, délais dépassés, erreurs et délais de réponse dernier/maximum. Une fenêtre courte ou huit connexions simulées ne valide pas huit connexions matérielles durables. Bluetooth classique limite généralement une piconet à sept périphériques actifs : **ne pas garantir huit plateaux sur un adaptateur** ; prévoir un deuxième adaptateur ou de l'USB si nécessaire. L'affectation explicite de plusieurs adaptateurs Bluetooth reste hors périmètre.
 
 ### API
 
-Le serveur écoute uniquement localhost. `GET /api/health`, `/api/config`, `/api/tables` ; `POST /api/discovery/scan`, `/api/bluetooth/connect`, `/api/tables/count` (`count`, ajout sans suppression), `/api/tables/associate`, `/api/tables/dissociate`, `/api/tables/enroll`, `/api/tables/visibility`, `/api/simulator/move`, `/api/simulator/status`, `/api/players/import` ; export `/api/export/1.pgn` ou `.json`. Le flux temps réel est `WS /api/stream`.
+Le serveur écoute uniquement localhost. `GET /api/health`, `/api/config`, `/api/tables` ; `POST /api/discovery/scan`, `/api/bluetooth/connect`, `/api/tables/count` (`count`, ajout sans suppression), `/api/tables/associate`, `/api/tables/dissociate`, `/api/tables/enroll`, `/api/tables/visibility`, `/api/players/import` ; export `/api/export/1.pgn` ou `.json`. Le flux temps réel est `WS /api/stream`. La page de simulation utilise `WS /api/dgt/simulator/:tableId`.
 
 API matérielle :
 
@@ -115,7 +118,6 @@ API matérielle :
 | `PORT`          | `8787` | Port HTTP.                                                         |
 | `TABLES`        | `4`    | Nombre de tables (1 à 32).                                         |
 | `DGT_DATA_DIR`  | `data` | Dossier de `config.json` (écrit atomiquement).                     |
-| `DGT_SIMULATOR` | actif  | `off` désactive les échiquiers simulés.                            |
 | `DGT_BLUETOOTH` | actif  | `off` désactive le scan Bluetooth (utile sans adaptateur).         |
 
 ## Qualité
@@ -138,4 +140,4 @@ Node.js 26 exécute directement les fichiers TypeScript en mode « strip-only »
 
 `src/dgt/protocol.ts` contient le protocole pur (aucun import applicatif ou série), `client.ts` le multiplexage des messages sur l'interface `ByteTransport`, `serial.ts` l'unique dépendance à `serialport`, `simulator.ts` le simulateur protocolaire, et `recording.ts` les captures/rejeux. Cet ensemble ne dépend ni du domaine, ni de HTTP, ni de `chess.js`, pour permettre son extraction ultérieure.
 
-`src/domain` contient les agrégats et invariants, `src/adapters/dgt.ts` traduit les observations matérielles en état de projection et reconstruit les coups. Les autres adaptateurs couvrent stockage, simulateur métier, export, Bluetooth et RFCOMM. `scripts/rfcomm-bind.sh` est le seul code exécuté en root, et `src/server.ts` porte HTTP/WebSocket. `services/web` contient les deux pages et les modules purs testés. Aucune dépendance Azure/cloud.
+`src/domain` contient les agrégats et invariants, `src/adapters/dgt.ts` traduit les observations matérielles en état de projection et reconstruit les coups. Les autres adaptateurs couvrent stockage, export, Bluetooth et RFCOMM. `scripts/rfcomm-bind.sh` est le seul code exécuté en root, et `src/server.ts` porte HTTP/WebSocket. `services/web` contient l'affichage, l'administration et l'application Vue du simulateur. Aucune dépendance Azure/cloud.

@@ -490,6 +490,9 @@ export class DgtTransport extends EventEmitter {
         const s = this.sessions.get(tableId);
         if (s) this.report(s, error instanceof Error ? error : new Error(String(error)));
       });
+    const connectedDuringDisconnect = this.wanted.get(tableId);
+    if (connectedDuringDisconnect?.timer) clearTimeout(connectedDuringDisconnect.timer);
+    this.wanted.delete(tableId);
     await this.releaseSession(tableId);
   }
   private async releaseSession(tableId: number): Promise<void> {

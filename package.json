@@ -4,27 +4,33 @@
         "node": ">=26"
     },
     "scripts": {
-        "dev": "node src/server.ts",
-        "start": "node src/server.ts",
+        "dev": "node --run web:build && node src/server.ts",
+        "start": "node --run web:build && node src/server.ts",
         "test": "vitest run",
+        "web:dev": "vite services/web/simulator --config vite.config.ts",
+        "web:build": "vite build services/web/simulator --config vite.config.ts",
         "dgt:replay": "node scripts/dgt-replay.ts",
         "dgt:probe": "node scripts/dgt-probe.ts",
-        "format": "oxfmt --write src tests services scripts/*.ts .vscode oxlint.json tsconfig.json",
-        "format:check": "oxfmt --check src tests services scripts/*.ts .vscode oxlint.json tsconfig.json",
-        "lint": "tsc --noEmit && oxlint src tests services",
-        "check": "node --run format:check && node --run lint && node --run test"
+        "format": "oxfmt --write src tests services scripts/*.ts .vscode oxlint.json tsconfig.json vite.config.ts",
+        "format:check": "oxfmt --check src tests services scripts/*.ts .vscode oxlint.json tsconfig.json vite.config.ts",
+        "lint": "tsc --noEmit --runExternalCode && oxlint src tests services",
+        "check": "node --run format:check && node --run lint && node --run test && node --run web:build"
     },
     "dependencies": {
         "chess.js": "^1.4.0",
         "serialport": "^13.0.0",
+        "vue": "^3.5.45",
         "ws": "^8.22.0"
     },
     "devDependencies": {
         "@types/node": "^26.6.5",
         "@types/ws": "^8.18.2",
+        "@vitejs/plugin-vue": "^6.0.10",
+        "@vue/content-mapper": "^4.0.0-alpha.0",
         "oxfmt": "^0.75.0",
         "oxlint": "^1.90.0",
-        "typescript": "^7.0.2",
+        "typescript": "^7.1.0-beta",
+        "vite": "^8.3.6",
         "vitest": "^5.0.5"
     }
 }

@@ -200,6 +200,21 @@ describe("DGT hardware adapter", () => {
       fen: "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1",
     });
   });
+  it("applies a batched simulated position through the real DGT protocol", async () => {
+    const { simulator, transport, latest } = setup();
+    await transport.connect(1, "DGT_BT_TEST", "test");
+    const next = [...INITIAL_CODES];
+    next[squareIndex("e2")] = 0;
+    next[squareIndex("e4")] = 1;
+    simulator.setPosition(next);
+    await settle();
+    expect(latest()).toMatchObject({
+      fen: expect.stringContaining("4P3"),
+      lastMove: "e2e4",
+      positionStatus: "tracked",
+    });
+    expect(() => simulator.setPosition([...next, 1])).toThrow(/Position/);
+  });
   it("always maps left to white, including when connecting to a running clock", async () => {
     const { simulator, transport, latest } = setup();
     simulator.clock = [0, 9, 0, 0, 8, 0, 17];
@@ -263,15 +278,19 @@ describe("DGT hardware adapter", () => {
     });
     transports.push(transport);
     await Promise.all(simulators.map((_, i) => transport.connect(i + 1, `DGT_BT_${i}`, String(i))));
-    await new Promise((resolve) => setTimeout(resolve, 70));
-    const diagnostics = transport.diagnostics();
-    expect(diagnostics).toHaveLength(8);
-    for (const board of diagnostics) {
-      expect(board).toMatchObject({ connected: true, timeouts: 0, protocolErrors: 0 });
-      expect(
-        simulators[board.tableId - 1].commands.filter((c) => c === Command.position).length,
-      ).toBeGreaterThanOrEqual(4);
-    }
+    await vi.waitFor(
+      () => {
+        const diagnostics = transport.diagnostics();
+        expect(diagnostics).toHaveLength(8);
+        for (const board of diagnostics) {
+          expect(board).toMatchObject({ connected: true, timeouts: 0, protocolErrors: 0 });
+          expect(
+            simulators[board.tableId - 1].commands.filter((c) => c === Command.position).length,
+          ).toBeGreaterThanOrEqual(4);
+        }
+      },
+      { timeout: 1000, interval: 10 },
+    );
   });
   it("reports transport faults and frees sessions for explicit reconnection", async () => {
     const { simulator, transport, latest } = setup();
@@ -297,5 +316,31 @@ describe("DGT hardware adapter", () => {
     simulator.fail(new Error("link lost"));
     await new Promise((resolve) => setTimeout(resolve, 40));
     expect(scheduled).toEqual([1]);
+  });
+  it("does not schedule a reconnect when disconnecting during connection startup", async () => {
+    let releaseOpen!: () => void;
+    const opened = new Promise<void>((resolve) => (releaseOpen = resolve));
+    const simulator = new ProtocolSimulator();
+    const open = simulator.open.bind(simulator);
+    simulator.open = async () => {
+      await opened;
+      await open();
+    };
+    const transport = new DgtTransport({
+      createTransport: () => simulator,
+      reconnectInitialMs: 5,
+    });
+    transports.push(transport);
+    const reconnects: number[] = [];
+    transport.on("reconnect-scheduled", ({ attempt }) => reconnects.push(attempt));
+    const connection = transport.connect(1, "DGT_BT_TEST", "test");
+    await Promise.resolve();
+    await Promise.resolve();
+    const disconnect = transport.disconnect(1);
+    releaseOpen();
+    await Promise.all([connection, disconnect]);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(transport.diagnostics()).toEqual([]);
+    expect(reconnects).toEqual([]);
   });
 });
