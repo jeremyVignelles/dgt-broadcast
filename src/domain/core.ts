@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { INITIAL_FEN, validateTableId } from "./types.ts";
 import type { AppState, GameState, LogicalTable, Meeting, Player } from "./types.ts";
 
@@ -97,7 +98,13 @@ export class BroadcastCore {
   }
   updateGame(id: number, patch: Partial<GameState>): GameState {
     const table = this.getTable(id);
-    table.game = { ...table.game, ...patch, tableId: id, updatedAt: new Date().toISOString() };
+    table.game = {
+      ...table.game,
+      ...patch,
+      ...("clock" in patch ? { clockReadingId: patch.clock ? randomUUID() : undefined } : {}),
+      tableId: id,
+      updatedAt: new Date().toISOString(),
+    };
     return table.game;
   }
   setVisible(id: number, visible: boolean): LogicalTable {

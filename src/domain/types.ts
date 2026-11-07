@@ -25,6 +25,7 @@ export interface GameState {
   whiteClock: number | null;
   blackClock: number | null;
   clock?: ClockReading;
+  clockReadingId?: string;
   boardBattery?: BatteryReading;
   result?: Result;
   resultStatus?: "none" | "reported" | "conflicting";

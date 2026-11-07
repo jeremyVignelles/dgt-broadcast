@@ -1,10 +1,15 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onUnmounted, ref, watch } from "vue";
 import type { LogicalTable } from "../../../../../src/domain/types.ts";
 import { formatClock, sideToMove } from "../../../board.js";
 import ChessBoard from "../components/ChessBoard.vue";
+import { DisplayClock } from "./clock.ts";
 
 const props = defineProps<{ table: LogicalTable }>();
+const times = ref<{ white: number | null; black: number | null }>({ white: null, black: null });
+const displayClock = new DisplayClock((value) => (times.value = value));
+watch(() => props.table.game, (value) => displayClock.update(value), { immediate: true });
+onUnmounted(() => displayClock.dispose());
 
 const STATUS: Record<string, { level: string; text?: string }> = {
   connected: { level: "ok" },
@@ -46,7 +51,7 @@ const isActive = (side: "white" | "black") => status.value.level === "ok" && tur
       <span class="name">{{ game.black?.name ?? "Noir" }}</span>
       <span v-if="game.black?.elo" class="elo">{{ game.black.elo }}</span>
       <span class="clock" :class="{ active: isActive('black') }">{{
-        formatClock(game.blackClock)
+        formatClock(times.black)
       }}</span>
     </div>
     <div class="board">
@@ -57,7 +62,7 @@ const isActive = (side: "white" | "black") => status.value.level === "ok" && tur
       <span v-if="game.white?.elo" class="elo">{{ game.white.elo }}</span>
       <span v-if="game.result" class="badge">{{ game.result }}</span>
       <span class="clock" :class="{ active: isActive('white') }">{{
-        formatClock(game.whiteClock)
+        formatClock(times.white)
       }}</span>
     </div>
   </div>
