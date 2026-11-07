@@ -4,7 +4,7 @@ type Side = "white" | "black";
 type Times = Record<Side, number | null>;
 
 const SECOND = 1000;
-const TOLERANCE = 200;
+const TOLERANCE_SECONDS = 1;
 
 export class DisplayClock {
   private times: Times = { white: null, black: null };
@@ -43,18 +43,13 @@ export class DisplayClock {
     const sameClock = this.initialized && this.physicalId === game.physicalId;
     const previous = active ? this.times[active] : null;
     const received = active ? incoming[active] : null;
-    const nextIsClose =
-      active &&
-      previous !== null &&
-      previous > 0 &&
-      received === previous - 1 &&
-      this.nextTick - now <= TOLERANCE;
     const keepSchedule =
       sameClock &&
       active !== undefined &&
       active === this.active &&
       previous !== null &&
-      (received === previous || nextIsClose);
+      received !== null &&
+      Math.abs(received - previous) <= TOLERANCE_SECONDS;
 
     this.readingId = game.clockReadingId;
     this.physicalId = game.physicalId;

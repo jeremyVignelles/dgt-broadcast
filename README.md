@@ -21,7 +21,7 @@ Pour un lancement sans surveillance, `npm start` compile l'interface puis démar
 
 La page d'affichage montre pour chaque échiquier son libellé, sa position, le dernier coup, les joueurs et les horloges. Une icône discrète signale une connexion interrompue sans masquer la dernière position. La batterie n'est visible que dans l'administration.
 
-Sur l'écran de diffusion, l'horloge active décompte localement chaque seconde entre les transmissions. Les nouvelles lectures la recalibrent si nécessaire, avec une tolérance de 200 ms avant le prochain changement affiché.
+Sur l'écran de diffusion, l'horloge active décompte localement chaque seconde entre les transmissions. Une nouvelle lecture ne la recale que si elle diffère de plus d'une seconde du temps affiché. Les temps arrêtés sont actualisés à chaque lecture et un changement de côté relance le décompte.
 
 Dans l'administration, « Ajouter un échiquier » propose un simulateur ou un scan physique Bluetooth et des ports série USB. Sélectionnez un ou plusieurs périphériques, puis modifiez leur libellé depuis leur page. Détacher un échiquier physique le retire de la diffusion mais conserve sa configuration et sa dernière position ; il peut être ajouté à nouveau. Détacher un simulateur le supprime. Le simulateur reste actif côté serveur lorsque sa page est fermée ; sa position et ses paramètres sont enregistrés pour le redémarrage.
 

@@ -70,21 +70,87 @@ describe("display clock", () => {
   });
 
   it.each([
-    [799, true],
-    [800, false],
-    [801, false],
-  ])("recalibrates a future reading at %i ms only outside the tolerance", (delay, recalibrates) => {
+    [8, true],
+    [9, false],
+    [10, false],
+    [11, false],
+    [12, true],
+  ])("recalibrates a running clock reading of %i only beyond one second", (reading, recalibrates) => {
     const changed = vi.fn();
     const clock = new DisplayClock(changed);
     const state = game();
     clock.update(state);
-    vi.advanceTimersByTime(delay);
-    clock.update({ ...state, whiteClock: 9, clockReadingId: "2" });
-    expect(changed).toHaveBeenLastCalledWith({ white: recalibrates ? 9 : 10, black: 10 });
-    vi.advanceTimersByTime(1000 - delay);
-    expect(changed).toHaveBeenLastCalledWith({ white: 9, black: 10 });
-    vi.advanceTimersByTime(delay);
-    expect(changed).toHaveBeenLastCalledWith({ white: recalibrates ? 8 : 9, black: 10 });
+    vi.advanceTimersByTime(300);
+    clock.update({ ...state, whiteClock: reading, clockReadingId: "2" });
+    expect(changed).toHaveBeenLastCalledWith({
+      white: recalibrates ? reading : 10,
+      black: 10,
+    });
+    vi.advanceTimersByTime(700);
+    expect(changed).toHaveBeenLastCalledWith({
+      white: recalibrates ? reading : 9,
+      black: 10,
+    });
+    vi.advanceTimersByTime(300);
+    expect(changed).toHaveBeenLastCalledWith({
+      white: recalibrates ? reading - 1 : 9,
+      black: 10,
+    });
+    clock.dispose();
+  });
+
+  it("keeps a steady cadence through irregular readings and updates the stopped side", () => {
+    const changed = vi.fn();
+    const clock = new DisplayClock(changed);
+    const state = game();
+    clock.update(state);
+    vi.advanceTimersByTime(100);
+    clock.update({ ...state, whiteClock: 9, blackClock: 11, clockReadingId: "2" });
+    expect(changed).toHaveBeenLastCalledWith({ white: 10, black: 11 });
+    vi.advanceTimersByTime(900);
+    expect(changed).toHaveBeenLastCalledWith({ white: 9, black: 11 });
+    vi.advanceTimersByTime(700);
+    clock.update({ ...state, whiteClock: 10, blackClock: 12, clockReadingId: "3" });
+    expect(changed).toHaveBeenLastCalledWith({ white: 9, black: 12 });
+    vi.advanceTimersByTime(300);
+    expect(changed).toHaveBeenLastCalledWith({ white: 8, black: 12 });
+    clock.dispose();
+  });
+
+  it("immediately applies stopped readings and restarts the new active side", () => {
+    const changed = vi.fn();
+    const clock = new DisplayClock(changed);
+    const state = game();
+    clock.update(state);
+    vi.advanceTimersByTime(400);
+    clock.update({
+      ...state,
+      whiteClock: 9,
+      blackClock: 11,
+      clockReadingId: "2",
+      clock: { ...state.clock!, running: false },
+    });
+    expect(changed).toHaveBeenLastCalledWith({ white: 9, black: 11 });
+    vi.advanceTimersByTime(2000);
+    clock.update({
+      ...state,
+      whiteClock: 8,
+      blackClock: 10,
+      clockReadingId: "3",
+      clock: { ...state.clock!, running: false },
+    });
+    expect(changed).toHaveBeenLastCalledWith({ white: 8, black: 10 });
+    clock.update({
+      ...state,
+      whiteClock: 8,
+      blackClock: 10,
+      clockReadingId: "4",
+      clock: { ...state.clock!, activeSide: "right" },
+    });
+    vi.advanceTimersByTime(999);
+    expect(changed).toHaveBeenLastCalledWith({ white: 8, black: 10 });
+    vi.advanceTimersByTime(1);
+    expect(changed).toHaveBeenLastCalledWith({ white: 8, black: 9 });
     clock.dispose();
   });
 
