@@ -54,6 +54,25 @@ body {
   border-radius: calc(var(--strip) * 0.2);
   background: #2b2d33;
   font-weight: 700;
+  padding: 0 0.3em;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+  line-height: calc(var(--strip) * 0.85);
+}
+.link-status {
+  display: inline-flex;
+  color: #aab0bb;
+  flex: none;
+}
+.link-status svg {
+  width: 0.8em;
+  height: 0.8em;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
 }
 .name {
   flex: 1 1 0;
@@ -124,24 +143,6 @@ body {
 }
 .piece.b {
   color: #111;
-}
-.table.warn .board {
-  outline: calc(var(--strip) * 0.18) solid #f0b429;
-  outline-offset: calc(var(--strip) * -0.18);
-}
-.table.off .board {
-  filter: grayscale(1) brightness(0.45);
-}
-.overlay {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  text-align: center;
-  font-size: calc(var(--board) * 0.075);
-  font-weight: 800;
-  color: #fff;
-  text-shadow: 0 0 0.3em #000;
 }
 .empty {
   display: grid;

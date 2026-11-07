@@ -33,6 +33,8 @@ export interface GameState {
   orientation?: "normal" | "rotated";
   battery?: number;
   status: ConnectionStatus;
+  connectionError?: string;
+  retryScheduled?: boolean;
   updatedAt: string;
 }
 export interface LogicalTable {
@@ -40,6 +42,8 @@ export interface LogicalTable {
   label: string;
   visible: boolean;
   physicalId?: string;
+  kind?: "physical" | "virtual";
+  serialPath?: string;
   game: GameState;
 }
 export interface Meeting {

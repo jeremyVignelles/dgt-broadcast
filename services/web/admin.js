@@ -40,9 +40,9 @@ function renderTables() {
         <td>${t.physicalId ? escapeHtml(t.physicalId) : '<span class="hint">—</span>'}</td>
         <td class="${cls}">${label}</td>
         <td>${battery}</td>
-        <td><input type="checkbox" data-visible="${t.id}" ${t.visible ? "checked" : ""} /></td>
+        <td><input type="checkbox" data-visible="${t.id}" ${t.visible ? "checked" : ""} ${t.kind === "virtual" ? "disabled" : ""} /></td>
         <td>${t.game.clock?.connected ? `G ${formatClock(t.game.clock.left.seconds)} / D ${formatClock(t.game.clock.right.seconds)} · ${t.game.clock.running ? "marche" : "pause"}` : "Pendule absente / inconnue"}${t.game.result ? ` · ${escapeHtml(t.game.result)}` : ""}${t.game.resultStatus === "conflicting" ? " · Résultats contradictoires" : ""}${t.game.positionStatus === "unresolved" ? " · Position non reconstruite" : ""}</td>
-        <td>${t.physicalId ? `<button class="secondary" data-new-game="${t.id}">Nouvelle partie</button> <button class="secondary" data-refresh="${t.id}">Relire les données</button> <button class="secondary" data-history="${t.id}">Historique</button> <button class="secondary" data-disconnect="${t.id}">Déconnecter</button> <button class="secondary" data-dissociate="${t.id}">Dissocier</button>` : ""}</td>
+        <td>${t.physicalId ? `<button class="secondary" data-new-game="${t.id}">Nouvelle partie</button> <button class="secondary" data-refresh="${t.id}">Relire les données</button> <button class="secondary" data-history="${t.id}">Historique</button> ${t.kind === "virtual" ? "" : `<button class="secondary" data-disconnect="${t.id}">Déconnecter</button> <button class="secondary" data-dissociate="${t.id}">Dissocier</button>`}` : ""}</td>
       </tr>`;
     })
     .join("");
@@ -55,7 +55,10 @@ function renderDiscovered() {
     return;
   }
   const tableOptions = tables
-    .map((t) => `<option value="${t.id}">${escapeHtml(t.label)}</option>`)
+    .map(
+      (t) =>
+        `<option value="${t.id}" ${t.kind === "virtual" ? "disabled" : ""}>${escapeHtml(t.label)}</option>`,
+    )
     .join("");
   const chosen = new Map(
     [...body.querySelectorAll("select[data-target]")].map((s) => [s.dataset.target, s.value]),

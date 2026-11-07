@@ -4,7 +4,8 @@ import type { AppState, GameState, LogicalTable, Meeting, Player } from "./types
 export class BroadcastCore {
   readonly state: AppState;
   constructor(tableCount = 4) {
-    if (tableCount < 1 || tableCount > 32) throw new Error("tableCount must be between 1 and 32");
+    if (!Number.isInteger(tableCount) || tableCount < 0 || tableCount > 32)
+      throw new Error("tableCount must be between 0 and 32");
     this.state = {
       tables: Array.from({ length: tableCount }, (_, i) => this.table(i + 1)),
       discovered: [],
@@ -56,8 +57,37 @@ export class BroadcastCore {
   }
   ensureTableCount(count: number): void {
     validateTableId(count);
-    for (let id = this.state.tables.length + 1; id <= count; id++)
-      this.state.tables.push(this.table(id));
+    for (let id = 1; id <= count; id++)
+      if (!this.state.tables.some((table) => table.id === id))
+        this.state.tables.push(this.table(id));
+  }
+  addTable(kind: "physical" | "virtual", label: string): LogicalTable {
+    const id = Array.from({ length: 32 }, (_, index) => index + 1).find(
+      (candidate) => !this.state.tables.some((table) => table.id === candidate),
+    );
+    if (!id) throw new Error("Maximum de 32 échiquiers atteint");
+    const table = this.table(id);
+    table.kind = kind;
+    this.setLabelValue(table, label);
+    table.game.battery = undefined;
+    table.game.whiteClock = null;
+    table.game.blackClock = null;
+    this.state.tables.push(table);
+    return table;
+  }
+  renameTable(id: number, label: string): LogicalTable {
+    const table = this.getTable(id);
+    this.setLabelValue(table, label);
+    return table;
+  }
+  private setLabelValue(table: LogicalTable, label: string): void {
+    if (typeof label !== "string" || !label.trim() || label.trim().length > 100)
+      throw new Error("Le libellé doit contenir entre 1 et 100 caractères");
+    table.label = label.trim();
+  }
+  removeTable(id: number): void {
+    const table = this.getTable(id);
+    this.state.tables.splice(this.state.tables.indexOf(table), 1);
   }
   getTable(id: number): LogicalTable {
     validateTableId(id);

@@ -28,4 +28,18 @@ describe("BroadcastCore", () => {
     ]);
     expect(core.state.meeting?.players[0].name).toBe("High");
   });
+  it("adds, labels and removes boards without depending on array indexes", () => {
+    const core = new BroadcastCore(0);
+    const first = core.addTable("virtual", " Open A ");
+    const second = core.addTable("physical", "Open B");
+    expect(first.label).toBe("Open A");
+    expect(second.id).toBe(2);
+    core.removeTable(first.id);
+    expect(core.addTable("virtual", "Open C").id).toBe(1);
+    expect(() => core.renameTable(second.id, " ")).toThrow();
+    core.renameTable(second.id, "Table 1 Open B");
+    expect(core.getTable(second.id).label).toBe("Table 1 Open B");
+    core.ensureTableCount(3);
+    expect(core.state.tables.map((table) => table.id).sort()).toEqual([1, 2, 3]);
+  });
 });

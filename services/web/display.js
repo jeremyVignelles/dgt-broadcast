@@ -20,7 +20,6 @@ const STATUS = {
   discovered: { level: "off", text: "En attente" },
   enrolling: { level: "off", text: "Appairage…" },
 };
-const LOW_BATTERY = 20;
 
 let tables = [];
 let renderedIds = "";
@@ -29,12 +28,6 @@ const cache = new Map();
 function playerHtml(player, fallback) {
   const elo = player?.elo ? `<span class="elo">${escapeHtml(player.elo)}</span>` : "";
   return `<span class="name">${escapeHtml(player?.name ?? fallback)}</span>${elo}`;
-}
-
-function batteryHtml(battery) {
-  if (typeof battery !== "number") return '<span class="badge unknown">🔋 ?</span>';
-  if (battery < LOW_BATTERY) return `<span class="badge low">🪫 ${battery}%</span>`;
-  return `<span class="badge good">🔋 ${battery}%</span>`;
 }
 
 function boardHtml(game) {
@@ -65,11 +58,13 @@ function tableHtml(table) {
       : sideToMove(game.fen);
   const clock = (side, value) =>
     `<span class="clock${status.level === "ok" && turn === side ? " active" : ""}">${formatClock(value)}</span>`;
-  const overlay = status.text ? `<div class="overlay">${status.text}</div>` : "";
+  const link = status.text
+    ? `<span class="link-status" title="${status.text}" aria-label="${status.text}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.1 0l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1M14 11a5 5 0 0 0-7.1 0l-2 2a5 5 0 0 0 7.1 7.1l1.1-1.1M3 3l18 18"/></svg></span>`
+    : "";
   return `<div class="table ${status.level}">
-    <div class="strip"><span class="num">${escapeHtml(table.id)}</span>${playerHtml(game.black, "Noir")}${clock("black", game.blackClock)}</div>
-    <div class="board">${boardHtml(game)}${overlay}</div>
-    <div class="strip">${playerHtml(game.white, "Blanc")}${game.result ? `<span class="badge">${escapeHtml(game.result)}</span>` : ""}${batteryHtml(game.battery)}${clock("white", game.whiteClock)}</div>
+    <div class="strip"><span class="num">${escapeHtml(table.label)}</span>${link}${playerHtml(game.black, "Noir")}${clock("black", game.blackClock)}</div>
+    <div class="board">${boardHtml(game)}</div>
+    <div class="strip">${playerHtml(game.white, "Blanc")}${game.result ? `<span class="badge">${escapeHtml(game.result)}</span>` : ""}${clock("white", game.whiteClock)}</div>
   </div>`;
 }
 
@@ -104,7 +99,9 @@ function render() {
 }
 
 function connect() {
-  const socket = new WebSocket(`ws://${location.host}/api/stream`);
+  const socket = new WebSocket(
+    `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/api/stream`,
+  );
   socket.onopen = () => (offline.hidden = true);
   socket.onmessage = (event) => {
     const message = JSON.parse(event.data);

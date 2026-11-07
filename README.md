@@ -9,21 +9,25 @@ npm install
 npm run dev
 ```
 
-`npm run dev` construit le simulateur Vue/Vite puis démarre le serveur (`http://127.0.0.1:8787`). Trois pages sont servies :
+`npm run dev` démarre le serveur en mode surveillance et intègre Vite pour le rechargement du front, sur `http://127.0.0.1:8787`. Les changements du serveur le redémarrent ; ceux de l'interface Vue sont mis à jour à chaud, et les pages d'affichage et de diagnostic sont rechargées.
 
-| Page     | URL      | Rôle                                                                                                                             |
-| -------- | -------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| Affichage | `/`      | Grille épurée sans bouton, à projeter en plein écran (double-clic ou `F`). Elle occupe tout l'écran : 4 échiquiers = 2×2.        |
-| Admin    | `/admin` | Scan Bluetooth, association échiquier ↔ table, affichage/masquage des tables et diagnostics.                                     |
-| Simulateur | `/simulator` | Échiquier, pendule et batterie simulés via le vrai pilote protocolaire. Un seul simulateur par table ; sa fermeture déconnecte la table. |
+Pour un lancement sans surveillance, `npm start` compile l'interface puis démarre le serveur. Trois pages sont servies :
 
-`npm run web:dev` lance Vite pour le développement UI ; démarrer aussi `npm run dev` dans un autre terminal pour le serveur/API.
+| Page       | URL      | Rôle                                                                                                                      |
+| ---------- | -------- | ------------------------------------------------------------------------------------------------------------------------- |
+| Affichage  | `/`      | Grille épurée sans bouton, à projeter en plein écran (double-clic ou `F`). Elle occupe tout l'écran : 4 échiquiers = 2×2. |
+| Admin      | `/admin` | Sélection des échiquiers physiques et virtuels, libellés, batterie et visualisation.                                      |
+| Diagnostic | `/debug` | Outils de connexion, captures et diagnostics avancés.                                                                     |
 
-La page d'affichage montre pour chaque table : position, dernier coup surligné, joueurs, horloges, statut de connexion (échiquier grisé + message si déconnecté, contour orange si instable) et batterie (en rouge sous 20 %). Les détails (ELO, batterie normale) disparaissent quand les cellules deviennent petites.
+La page d'affichage montre pour chaque échiquier son libellé, sa position, le dernier coup, les joueurs et les horloges. Une icône discrète signale une connexion interrompue sans masquer la dernière position. La batterie n'est visible que dans l'administration.
+
+Dans l'administration, « Ajouter un échiquier » propose un simulateur ou un scan physique Bluetooth et des ports série USB. Sélectionnez un ou plusieurs périphériques, puis modifiez leur libellé depuis leur page. Détacher un échiquier physique le retire de la diffusion mais conserve sa configuration et sa dernière position ; il peut être ajouté à nouveau. Détacher un simulateur le supprime. Le simulateur reste actif côté serveur lorsque sa page est fermée ; sa position et ses paramètres sont enregistrés pour le redémarrage.
+
+Au démarrage, l'application tente de reconnecter les échiquiers sélectionnés : Bluetooth avec les adresses mémorisées, USB avec le port série mémorisé et simulateurs côté serveur. L'administration affiche l'état et les erreurs par échiquier ; cliquez sur l'icône de lien brisé pour relancer uniquement cet échiquier. Après une liaison établie, le pilote retente automatiquement une déconnexion série. Une première connexion échouée, une adresse Bluetooth inconnue ou un échec d'appairage doit être relancé manuellement ; un nouvel ajout ou scan peut être nécessaire. Pour un ancien échiquier USB sans port enregistré, utilisez la connexion série dans `/debug`.
 
 ### Découverte Bluetooth
 
-Le bouton « Scanner les échiquiers » de `/admin` lance `bluetoothctl --timeout 8 scan on` puis `bluetoothctl devices` et ne retient les appareils nommés `DGT_BT_*`. Prérequis : paquet `bluez`, adaptateur Bluetooth allumé. L'association se fait ensuite en choisissant la table de chaque échiquier ; elle est persistée. Un échiquier déjà associé à une autre table est déplacé, jamais dupliqué.
+Le choix d'un échiquier physique lance un scan. Sous Linux, celui-ci utilise `bluetoothctl --timeout 8 scan on` puis `bluetoothctl devices` et ne retient les appareils nommés `DGT_BT_*`. Prérequis : paquet `bluez`, adaptateur Bluetooth allumé. Les ports série détectés sont également proposés, sans garantie qu'ils correspondent tous à des échiquiers.
 
 Les adresses Bluetooth trouvées sont mémorisées dans `config.json` pour pouvoir lier les échiquiers après un redémarrage de l'application.
 
@@ -31,7 +35,7 @@ Les adresses Bluetooth trouvées sont mémorisées dans `config.json` pour pouvo
 
 L'application tourne avec l'utilisateur normal, **jamais en root**. Seule la création des périphériques `/dev/rfcommN` (`rfcomm bind`) demande des droits administrateur :
 
-1. « Connecter les échiquiers » (`/admin`) appaire d'abord les échiquiers associés qui ne le sont pas encore (voir ci-dessous), puis lit les liaisons existantes avec `rfcomm` (sans droits) et réutilise celles qui pointent déjà vers le bon échiquier.
+1. L'ajout d'échiquiers Bluetooth depuis `/admin` (ou « Connecter les échiquiers » dans `/debug`) appaire d'abord les échiquiers associés qui ne le sont pas encore (voir ci-dessous), puis lit les liaisons existantes avec `rfcomm` (sans droits) et réutilise celles qui pointent déjà vers le bon échiquier.
 2. Les liaisons manquantes sont créées en **un seul** appel `pkexec /bin/sh scripts/rfcomm-bind.sh N ADRESSE …`, donc un seul mot de passe (fenêtre polkit). Il faut une session graphique : en SSH, aucune fenêtre ne s'affiche. Le script revalide ses arguments et n'exécute que `rfcomm bind N ADRESSE 1`.
 3. udev donne aux périphériques `root:dialout` en mode `660`. L'utilisateur doit appartenir au groupe `dialout` (`id -nG` pour vérifier, sinon `sudo usermod -aG dialout $USER` puis se reconnecter). L'application ne modifie jamais les permissions des fichiers.
 4. Les liaisons restent en place jusqu'au redémarrage de la machine ; l'application ne les libère pas à l'arrêt (`sudo rfcomm release N` pour le faire à la main).
@@ -66,11 +70,11 @@ Le suivi du dernier coup ne gère pas encore un véritable historique d'annulati
 
 Lors d'un téléchargement d'une mémoire circulaire pleine (7936 octets), le premier octet peut être le numéro de case d'une entrée dont le début a été écrasé. Ce cas est décodé en ignorant cet octet uniquement au début d'un tampon plein, avec un avertissement explicite et conservation de tous les octets dans le champ `raw` du JSON. Un transfert sans en-tête ou tronqué reste une erreur : il faut retenter le téléchargement, sans considérer les octets reçus comme un historique complet.
 
-Après une connexion réussie, une perte de liaison déclenche une reconnexion automatique avec backoff exponentiel (1 s, doublé jusqu'à 30 s, avec gigue ; `reconnectInitialMs`/`reconnectMaxMs` de `DgtTransport`), tracée dans la capture (`diagnostics.reconnect`) ; elle s'arrête à la déconnexion manuelle depuis `/admin`. Un échec de la connexion initiale n'est pas relancé automatiquement. Les ports se ferment à la déconnexion ; il est possible de réessayer sans redémarrer Node.js. Sous Windows, les ports sont de la forme `COMn` (ex. `COM3`) ; l'appairage Bluetooth se fait dans les paramètres Windows, qui crée un port COM sortant, et la fonction « Connecter les échiquiers » (BlueZ/`rfcomm`) est désactivée : on ouvre le port COM explicitement depuis `/admin` ou avec `npm run dgt:probe -- COM3`. Dans `/admin`, on peut ajouter des tables jusqu'à 32, lire l'historique et ouvrir un port USB ou RFCOMM explicitement. Les identifiants USB dérivés du chemin sont provisoires : utiliser un chemin `/dev/serial/by-id/…` stable de préférence.
+Après une connexion réussie, une perte de liaison déclenche une reconnexion automatique avec backoff exponentiel (1 s, doublé jusqu'à 30 s, avec gigue ; `reconnectInitialMs`/`reconnectMaxMs` de `DgtTransport`), tracée dans la capture (`diagnostics.reconnect`) ; elle s'arrête lorsque l'échiquier est détaché. Un échec de la connexion initiale n'est pas relancé automatiquement. Les ports se ferment à la déconnexion ; il est possible de réessayer sans redémarrer Node.js. Sous Windows, les ports sont de la forme `COMn` (ex. `COM3`) ; l'appairage Bluetooth se fait dans les paramètres Windows, qui crée un port COM sortant. L'application recherche ce port lors de la connexion Bluetooth ; on peut aussi ouvrir un port explicitement dans `/debug` ou avec `npm run dgt:probe -- COM3`. Les outils de lecture d'historique et de connexion série manuelle sont disponibles dans `/debug`. Les identifiants USB dérivés du chemin sont provisoires : utiliser un chemin `/dev/serial/by-id/…` stable de préférence.
 
 ### Captures guidées, rejeu et stabilité
 
-Dans `/admin`, démarrer une session **avant** les essais ou la connexion des plateaux. Télécharger d'abord l'historique interne de chaque plateau : il s'agit d'une mémoire circulaire de changements et de temps, **pas d'un PGN garanti**. Le téléchargement est décodé en tags, changements de cases (pièces spéciales comprises) et temps gauche/droite ; il ne reconstruit pas encore une partie historique.
+Dans `/debug`, démarrer une session **avant** les essais ou la connexion des plateaux. Télécharger d'abord l'historique interne de chaque plateau : il s'agit d'une mémoire circulaire de changements et de temps, **pas d'un PGN garanti**. Le téléchargement est décodé en tags, changements de cases (pièces spéciales comprises) et temps gauche/droite ; il ne reconstruit pas encore une partie historique.
 
 Le parcours guidé propose position initiale, démarrage de pendule, coups, captures, roque, promotion, prise en passant, pièces spéciales et déconnexions. Marquer le début de l'étape, effectuer l'action, puis passer à la suivante ; les étapes indisponibles peuvent être sautées. Les marqueurs sont manuels, pas une validation automatique de l'action.
 
@@ -87,38 +91,40 @@ npm run dgt:replay -- data/recordings/IDENTIFIANT.jsonl
 npm run dgt:probe -- --seconds 60 --history /dev/rfcomm0 /dev/rfcomm1
 ```
 
-Le rejeu utilise le vrai parseur et le vrai décodeur ; il ne simule pas encore l'écoulement du temps ni les requêtes applicatives. `ProtocolSimulator` répond aux commandes au niveau octet ; la page `/simulator` le pilote et fait transiter les changements de cases, pendule et batterie par le vrai pilote DGT. La connexion WebSocket dédiée est limitée à une page par table et utilise un heartbeat pour nettoyer les onglets fermés brutalement.
+Le rejeu utilise le vrai parseur et le vrai décodeur ; il ne simule pas encore l'écoulement du temps ni les requêtes applicatives. `ProtocolSimulator` répond aux commandes au niveau octet ; la page d'un échiquier virtuel le pilote et fait transiter les changements de cases, pendule et batterie par le vrai pilote DGT. La connexion de commande WebSocket est limitée à une page par échiquier ; le simulateur et sa pendule continuent de fonctionner côté serveur quand la page est fermée.
 
-Pour tester huit plateaux : les allumer, scanner, ajouter huit tables, associer et connecter les huit plateaux, puis laisser une capture ouverte. Le panneau de stabilité affiche les réponses aux contrôles de position, octets/messages, délais dépassés, erreurs et délais de réponse dernier/maximum. Une fenêtre courte ou huit connexions simulées ne valide pas huit connexions matérielles durables. Bluetooth classique limite généralement une piconet à sept périphériques actifs : **ne pas garantir huit plateaux sur un adaptateur** ; prévoir un deuxième adaptateur ou de l'USB si nécessaire. L'affectation explicite de plusieurs adaptateurs Bluetooth reste hors périmètre.
+Pour tester huit plateaux : les allumer, les sélectionner lors du scan, puis laisser une capture ouverte. Le panneau de stabilité dans `/debug` affiche les réponses aux contrôles de position, octets/messages, délais dépassés, erreurs et délais de réponse dernier/maximum. Une fenêtre courte ou huit connexions simulées ne valide pas huit connexions matérielles durables. Bluetooth classique limite généralement une piconet à sept périphériques actifs : **ne pas garantir huit plateaux sur un adaptateur** ; prévoir un deuxième adaptateur ou de l'USB si nécessaire. L'affectation explicite de plusieurs adaptateurs Bluetooth reste hors périmètre.
 
 ### API
 
 Le serveur écoute uniquement localhost. `GET /api/health`, `/api/config`, `/api/tables` ; `POST /api/discovery/scan`, `/api/bluetooth/connect`, `/api/tables/count` (`count`, ajout sans suppression), `/api/tables/associate`, `/api/tables/dissociate`, `/api/tables/enroll`, `/api/tables/visibility`, `/api/players/import` ; export `/api/export/1.pgn` ou `.json`. Le flux temps réel est `WS /api/stream`. La page de simulation utilise `WS /api/dgt/simulator/:tableId`.
 
+La sélection utilise `POST /api/boards/add` (`kind`, `label` et, pour un échiquier physique, `physicalId` ou `path`), `/api/boards/rename` (`tableId`, `label`), `/api/boards/reconnect` (`tableId`) et `/api/boards/remove` (`tableId`). L'identifiant numérique est interne et distinct du libellé affiché.
+
 API matérielle :
 
-| Méthode | Route | Entrée / sortie |
-|---|---|---|
-| GET | `/api/dgt/diagnostics` | Diagnostics par liaison et état de l'enregistrement. |
-| GET | `/api/dgt/serial/ports` | Ports série connus du système. |
-| POST | `/api/dgt/serial/connect` | `{ tableId, path, physicalId? }`, identifiant `DGT_USB_…` par défaut. |
-| POST | `/api/dgt/disconnect` | `{ tableId }`. |
-| POST | `/api/dgt/history` | `{ tableId }` → `{ kind: "history", entries }`. |
-| POST | `/api/dgt/refresh` | `{ tableId }` → diagnostics après relecture de position, pendule, batterie et identité manquante. |
-| GET | `/api/dgt/recordings` | État, identifiants de sessions, étapes guidées. |
-| POST | `/api/dgt/recordings/start` | Démarre une capture de toutes les liaisons et relit les états connectés. |
-| POST | `/api/dgt/recordings/mark` | `{ label }`. |
-| POST | `/api/dgt/recordings/stop` | Termine la capture et attend l'écriture. |
-| GET | `/api/dgt/recordings/:id.jsonl` | Téléchargement local de la capture. |
+| Méthode | Route                           | Entrée / sortie                                                                                   |
+| ------- | ------------------------------- | ------------------------------------------------------------------------------------------------- |
+| GET     | `/api/dgt/diagnostics`          | Diagnostics par liaison et état de l'enregistrement.                                              |
+| GET     | `/api/dgt/serial/ports`         | Ports série connus du système.                                                                    |
+| POST    | `/api/dgt/serial/connect`       | `{ tableId, path, physicalId? }`, identifiant `DGT_USB_…` par défaut.                             |
+| POST    | `/api/dgt/disconnect`           | `{ tableId }`.                                                                                    |
+| POST    | `/api/dgt/history`              | `{ tableId }` → `{ kind: "history", entries }`.                                                   |
+| POST    | `/api/dgt/refresh`              | `{ tableId }` → diagnostics après relecture de position, pendule, batterie et identité manquante. |
+| GET     | `/api/dgt/recordings`           | État, identifiants de sessions, étapes guidées.                                                   |
+| POST    | `/api/dgt/recordings/start`     | Démarre une capture de toutes les liaisons et relit les états connectés.                          |
+| POST    | `/api/dgt/recordings/mark`      | `{ label }`.                                                                                      |
+| POST    | `/api/dgt/recordings/stop`      | Termine la capture et attend l'écriture.                                                          |
+| GET     | `/api/dgt/recordings/:id.jsonl` | Téléchargement local de la capture.                                                               |
 
 ### Variables d'environnement
 
-| Variable        | Défaut | Effet                                                              |
-| --------------- | ------ | ------------------------------------------------------------------ |
-| `PORT`          | `8787` | Port HTTP.                                                         |
-| `TABLES`        | `4`    | Nombre de tables (1 à 32).                                         |
-| `DGT_DATA_DIR`  | `data` | Dossier de `config.json` (écrit atomiquement).                     |
-| `DGT_BLUETOOTH` | actif  | `off` désactive le scan Bluetooth (utile sans adaptateur).         |
+| Variable        | Défaut | Effet                                                                                |
+| --------------- | ------ | ------------------------------------------------------------------------------------ |
+| `PORT`          | `8787` | Port HTTP.                                                                           |
+| `TABLES`        | `0`    | Nombre initial de tables héritées (0 à 32), uniquement sans configuration existante. |
+| `DGT_DATA_DIR`  | `data` | Dossier de `config.json` (écrit atomiquement).                                       |
+| `DGT_BLUETOOTH` | actif  | `off` désactive le scan Bluetooth (utile sans adaptateur).                           |
 
 ## Qualité
 
@@ -140,4 +146,4 @@ Node.js 26 exécute directement les fichiers TypeScript en mode « strip-only »
 
 `src/dgt/protocol.ts` contient le protocole pur (aucun import applicatif ou série), `client.ts` le multiplexage des messages sur l'interface `ByteTransport`, `serial.ts` l'unique dépendance à `serialport`, `simulator.ts` le simulateur protocolaire, et `recording.ts` les captures/rejeux. Cet ensemble ne dépend ni du domaine, ni de HTTP, ni de `chess.js`, pour permettre son extraction ultérieure.
 
-`src/domain` contient les agrégats et invariants, `src/adapters/dgt.ts` traduit les observations matérielles en état de projection et reconstruit les coups. Les autres adaptateurs couvrent stockage, export, Bluetooth et RFCOMM. `scripts/rfcomm-bind.sh` est le seul code exécuté en root, et `src/server.ts` porte HTTP/WebSocket. `services/web` contient l'affichage, l'administration et l'application Vue du simulateur. Aucune dépendance Azure/cloud.
+`src/domain` contient les agrégats et invariants, `src/adapters/dgt.ts` traduit les observations matérielles en état de projection et reconstruit les coups. Les autres adaptateurs couvrent stockage, export, Bluetooth et RFCOMM. `scripts/rfcomm-bind.sh` est le seul code exécuté en root, et `src/server.ts` porte HTTP/WebSocket. `services/web` contient l'affichage et une seule application Vue d'administration, qui intègre le simulateur comme composant ; les anciens outils sont accessibles sur `/debug`. Aucune dépendance Azure/cloud.

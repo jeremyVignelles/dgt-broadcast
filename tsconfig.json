@@ -22,7 +22,7 @@
     "src",
     "tests",
     "scripts/*.ts",
-    "services/web/simulator/src/**/*.ts",
-    "services/web/simulator/src/**/*.vue"
+    "services/web/admin/src/**/*.ts",
+    "services/web/admin/src/**/*.vue"
   ]
 }

@@ -317,6 +317,24 @@ describe("DGT hardware adapter", () => {
     await new Promise((resolve) => setTimeout(resolve, 40));
     expect(scheduled).toEqual([1]);
   });
+  it("keeps automatic retries after a manual reconnection fails", async () => {
+    const { simulator, transport } = setup({ reconnectInitialMs: 200 });
+    const scheduled: number[] = [];
+    transport.on("reconnect-scheduled", ({ attempt }) => scheduled.push(attempt));
+    await transport.connect(1, "DGT_BT_TEST", "test");
+    simulator.fail(new Error("link lost"));
+    const open = simulator.open.bind(simulator);
+    simulator.open = async () => {
+      throw new Error("port unavailable");
+    };
+    await expect(transport.connect(1, "DGT_BT_TEST", "test")).rejects.toThrow("port unavailable");
+    expect(scheduled).toEqual([1, 2]);
+    simulator.open = open;
+    await vi.waitFor(() => expect(transport.diagnostics()[0]?.connected).toBe(true), {
+      timeout: 2000,
+      interval: 20,
+    });
+  });
   it("does not schedule a reconnect when disconnecting during connection startup", async () => {
     let releaseOpen!: () => void;
     const opened = new Promise<void>((resolve) => (releaseOpen = resolve));

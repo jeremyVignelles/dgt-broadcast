@@ -145,10 +145,19 @@ export class DgtTransport extends EventEmitter {
         return Promise.reject(new Error("Une connexion est déjà en cours sur cette table"));
       return pending.promise;
     }
+    const wanted = this.wanted.get(tableId);
+    if (wanted?.timer) {
+      clearTimeout(wanted.timer);
+      wanted.timer = undefined;
+    }
     // Deferred so the connection is registered before connectSession emits any close event.
     const promise = Promise.resolve()
       .then(() => this.connectSession(tableId, physicalId, path))
-      .finally(() => this.connections.delete(tableId));
+      .finally(() => this.connections.delete(tableId))
+      .catch((error: unknown) => {
+        this.scheduleReconnect(tableId);
+        throw error;
+      });
     this.connections.set(tableId, { physicalId, path, promise });
     return promise;
   }
