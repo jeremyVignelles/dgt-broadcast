@@ -258,6 +258,10 @@ p {
   width: min(560px, 100%);
   aspect-ratio: 1;
 }
+.physical-board {
+  width: min(560px, 100%);
+  aspect-ratio: 1;
+}
 .square {
   display: grid;
   place-items: center;

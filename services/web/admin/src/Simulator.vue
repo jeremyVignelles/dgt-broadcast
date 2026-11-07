@@ -331,7 +331,7 @@ onUnmounted(() => {
             <span v-for="rank in 8" :key="rank">{{ 9 - rank }}</span>
           </div>
           <div class="board-frame">
-            <div class="chessboard">
+            <div class="simulator-board">
               <div v-for="(row, rowIndex) in boardRows" :key="rowIndex" class="board-row">
                 <div
                   v-for="square in row"

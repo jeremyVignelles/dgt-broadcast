@@ -1,4 +1,4 @@
-# DGT Broadcast
+﻿# DGT Broadcast
 
 MVP local hors-ligne pour projeter les états de 1 à 32 échiquiers DGT. Le domaine est indépendant du transport ; la découverte Bluetooth utilise `bluetoothctl` (BlueZ) et les liaisons série sont créées avec `rfcomm bind`.
 
@@ -9,7 +9,7 @@ npm install
 npm run dev
 ```
 
-`npm run dev` démarre le serveur en mode surveillance et intègre Vite pour le rechargement du front, sur `http://127.0.0.1:8787`. Les changements du serveur le redémarrent ; ceux de l'interface Vue sont mis à jour à chaud, et les pages d'affichage et de diagnostic sont rechargées.
+`npm run dev` démarre le serveur en mode surveillance et intègre Vite pour le rechargement du front, sur `http://127.0.0.1:8787`. Les changements du serveur le redémarrent ; ceux de l'interface Vue sont mis à jour à chaud, et la page de diagnostic est rechargée.
 
 Pour un lancement sans surveillance, `npm start` compile l'interface puis démarre le serveur. Trois pages sont servies :
 

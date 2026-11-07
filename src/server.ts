@@ -32,7 +32,6 @@ const isWindows = process.platform === "win32";
 const bluetoothEnabled =
   process.env.DGT_BLUETOOTH !== "off" && (process.platform === "linux" || isWindows);
 const pages: Record<string, string> = {
-  "/": "display.html",
   "/debug": "admin.html",
 };
 const mimeTypes: Record<string, string> = {
@@ -601,14 +600,15 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
         res.writeHead(302, { location: "/admin" });
         return res.end();
       }
+      const viteEntry = url.pathname === "/" ? "display.html" : "index.html";
       const targetPath =
         pages[url.pathname] ??
-        (url.pathname === "/admin" || url.pathname.startsWith("/admin/")
+        (url.pathname === "/" || url.pathname === "/admin" || url.pathname.startsWith("/admin/")
           ? development
-            ? "admin/index.html"
+            ? `admin/${viteEntry}`
             : url.pathname.startsWith("/admin/assets/")
               ? join("dist", "admin", url.pathname.slice("/admin/".length))
-              : "dist/admin/index.html"
+              : join("dist", "admin", viteEntry)
           : url.pathname.slice(1));
       const target = resolve(webRoot, targetPath);
       if (!target.startsWith(webRoot + sep)) return json(res, { error: "invalid path" }, 400);
@@ -616,7 +616,7 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
         const file = await readFile(target);
         if (vite && extname(target) === ".html") {
           const html =
-            targetPath === "admin/index.html"
+            targetPath.startsWith("admin/") && targetPath.endsWith(".html")
               ? await vite.transformIndexHtml(url.pathname, file.toString("utf8"))
               : file
                   .toString("utf8")
@@ -721,16 +721,9 @@ if (development) {
     appType: "custom",
     server: { middlewareMode: true, hmr: { server } },
   });
-  const staticFiles = [
-    "display.html",
-    "display.js",
-    "display.css",
-    "admin.html",
-    "admin.js",
-    "admin.css",
-    "board.js",
-    "layout.js",
-  ].map((file) => resolve(webRoot, file));
+  const staticFiles = ["admin.html", "admin.js", "admin.css", "board.js", "layout.js"].map((file) =>
+    resolve(webRoot, file),
+  );
   vite.watcher.add(staticFiles);
   vite.watcher.on("change", (file) => {
     if (staticFiles.includes(resolve(file))) vite?.hot.send({ type: "full-reload", path: "*" });

@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import type { ConnectionStatus, LogicalTable } from "../../../../src/domain/types.ts";
-import { formatClock, parseFen } from "../../board.js";
+import { formatClock } from "../../board.js";
+import ChessBoard from "./components/ChessBoard.vue";
 import Simulator from "./Simulator.vue";
 
 type Device = {
@@ -31,7 +32,6 @@ const board = computed(() => {
   const match = path.value.match(/^\/admin\/boards\/(\d+)$/);
   return match ? selected.value.find((table) => table.id === Number(match[1])) : undefined;
 });
-const squares = computed(() => (board.value ? parseFen(board.value.game.fen) : []));
 const statusLabels: Record<ConnectionStatus, string> = {
   connected: "Connecté",
   degraded: "Connexion instable",
@@ -406,17 +406,8 @@ onUnmounted(() => {
         </form>
         <Simulator v-if="board.kind === 'virtual'" :key="board.id" :table-id="board.id" />
         <div v-else class="physical-view">
-          <div class="chessboard" aria-label="Dernière position de l'échiquier">
-            <div
-              v-for="(square, index) in squares"
-              :key="index"
-              class="square"
-              :class="(Math.floor(index / 8) + index) % 2 ? 'dark' : 'light'"
-            >
-              <span v-if="square" :class="square.white ? 'white-piece' : 'black-piece'">{{
-                square.glyph
-              }}</span>
-            </div>
+          <div class="physical-board">
+            <ChessBoard :fen="board.game.fen" :last-move="board.game.lastMove" />
           </div>
           <div>
             <h2>Position reçue</h2>
